@@ -37,4 +37,12 @@ def setup_argument_parser(description):
     parser = argparse.ArgumentParser(description=description)
     parser.add_argument('--input', required=True, help='Input file path')
     parser.add_argument('--output', required=True, help='Output file path')
-    return parser 
+    return parser
+
+# Added helper function for truncating text to a max token count (approximation using whitespace splitting)
+def truncate_text_by_tokens(text: str, max_tokens: int = 80000) -> str:
+    """Truncate the given text to at most max_tokens tokens. Tokens are approximated by splitting on whitespace."""
+    tokens = text.split()
+    if len(tokens) > max_tokens:
+        return ' '.join(tokens[:max_tokens])
+    return text 

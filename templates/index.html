@@ -17,14 +17,28 @@
             border-color: #000;
             background-color: rgba(0,0,0,0.1);
         }
+        .attempts-list {
+            max-height: 300px;
+            overflow-y: auto;
+        }
+        .code-block {
+            max-height: 300px;
+            overflow-y: auto;
+            font-size: 0.8rem;
+            background-color: #f8f9fa;
+            padding: 1rem;
+            border-radius: 0.375rem;
+            white-space: pre-wrap;
+            word-break: break-word;
+        }
     </style>
 </head>
 <body class="bg-gray-100 min-h-screen">
     <div class="container mx-auto px-4 py-8">
-        <div class="max-w-2xl mx-auto">
-            <h1 class="text-3xl font-bold text-center mb-8">GNSS Data Converter</h1>
+        <div class="max-w-4xl mx-auto">
+            <h1 class="text-3xl font-bold text-center mb-8">GNSS Data Converter v1.0.0</h1>
             
-            <div class="bg-white rounded-lg shadow-lg p-6">
+            <div class="bg-white rounded-lg shadow-lg p-6 mb-8">
                 <div id="upload-zone" class="drop-zone mb-4">
                     <p class="text-gray-600 mb-4">Drag and drop your GNSS data files here</p>
                     <p class="text-sm text-gray-500">or</p>
@@ -33,20 +47,10 @@
                     </button>
                     <input type="file" id="file-input" class="hidden" multiple>
                 </div>
-
-                <div id="file-list" class="space-y-2"></div>
-                
-                <div id="progress" class="hidden">
-                    <div class="w-full bg-gray-200 rounded-full h-2.5 dark:bg-gray-700 mt-4">
-                        <div id="progress-bar" class="bg-blue-600 h-2.5 rounded-full" style="width: 0%"></div>
-                    </div>
-                    <p id="status" class="text-sm text-gray-600 mt-2 text-center"></p>
-                </div>
             </div>
 
-            <div id="results" class="mt-8 hidden">
-                <h2 class="text-xl font-semibold mb-4">Processed Files</h2>
-                <div id="download-list" class="space-y-2"></div>
+            <div id="file-list" class="space-y-6">
+                <!-- File items will be added here -->
             </div>
         </div>
     </div>
@@ -55,11 +59,6 @@
         const uploadZone = document.getElementById('upload-zone');
         const fileInput = document.getElementById('file-input');
         const fileList = document.getElementById('file-list');
-        const progress = document.getElementById('progress');
-        const progressBar = document.getElementById('progress-bar');
-        const status = document.getElementById('status');
-        const results = document.getElementById('results');
-        const downloadList = document.getElementById('download-list');
 
         // Drag and drop handlers
         ['dragenter', 'dragover', 'dragleave', 'drop'].forEach(eventName => {
@@ -106,19 +105,45 @@
             const formData = new FormData();
             formData.append('file', file);
 
-            // Add file to list
+            // Create file item with detailed status sections
             const fileItem = document.createElement('div');
-            fileItem.className = 'flex items-center justify-between bg-gray-50 p-3 rounded';
+            fileItem.className = 'bg-white rounded-lg shadow-lg p-6';
             fileItem.innerHTML = `
-                <span class="text-sm text-gray-600">${file.name}</span>
-                <span class="text-xs text-gray-500">Uploading...</span>
+                <div class="flex items-center justify-between mb-4">
+                    <div class="flex items-center space-x-4">
+                        <span class="font-medium text-lg text-gray-700">${file.name}</span>
+                        <span class="status-badge px-3 py-1 text-sm font-medium rounded-full">Uploading...</span>
+                    </div>
+                </div>
+                
+                <div class="space-y-4">
+                    <!-- Status Details Section -->
+                    <div class="status-details text-sm text-gray-600 border-l-4 border-blue-500 pl-4"></div>
+                    
+                    <!-- Processing Attempts Section -->
+                    <div class="processing-attempts hidden">
+                        <h3 class="text-sm font-semibold text-gray-700 mb-2">Processing Attempts</h3>
+                        <div class="attempts-list space-y-3 border rounded-lg p-4 bg-gray-50"></div>
+                    </div>
+                    
+                    <!-- Code Execution Section -->
+                    <div class="code-execution hidden">
+                        <h3 class="text-sm font-semibold text-gray-700 mb-2">Generated Code</h3>
+                        <pre class="code-block language-python"></pre>
+                    </div>
+                </div>
             `;
             fileList.appendChild(fileItem);
 
-            // Show progress
-            progress.classList.remove('hidden');
-            progressBar.style.width = '0%';
-            status.textContent = 'Uploading...';
+            const statusBadge = fileItem.querySelector('.status-badge');
+            const statusDetails = fileItem.querySelector('.status-details');
+            const processingAttempts = fileItem.querySelector('.processing-attempts');
+            const attemptsList = fileItem.querySelector('.attempts-list');
+            const codeExecution = fileItem.querySelector('.code-execution');
+            const codeBlock = fileItem.querySelector('.code-block');
+
+            // Set initial status
+            updateFileStatus(fileItem, 'uploading', 'Preparing to upload...');
 
             fetch('/upload', {
                 method: 'POST',
@@ -128,40 +153,136 @@
             .then(data => {
                 if (data.task_id) {
                     pollStatus(data.task_id, fileItem);
+                } else {
+                    updateFileStatus(fileItem, 'error', 'Error: No task ID received');
                 }
             })
             .catch(error => {
-                fileItem.querySelector('span:last-child').textContent = 'Error: ' + error;
-                fileItem.classList.add('bg-red-100');
+                updateFileStatus(fileItem, 'error', 'Error: ' + error);
             });
         }
 
-        function pollStatus(taskId, fileItem) {
-            const poll = setInterval(() => {
-                fetch(`/status/${taskId}`)
-                    .then(response => response.json())
-                    .then(data => {
-                        if (data.state === 'SUCCESS') {
-                            clearInterval(poll);
-                            fileItem.querySelector('span:last-child').textContent = 'Completed';
-                            fileItem.classList.add('bg-green-100');
-                            
-                            // Add download link
-                            results.classList.remove('hidden');
-                            const downloadItem = document.createElement('div');
-                            downloadItem.className = 'flex items-center justify-between bg-white p-3 rounded shadow';
-                            downloadItem.innerHTML = `
-                                <span class="text-sm text-gray-600">${data.result.result_file}</span>
-                                <a href="/download/${data.result.result_file}" class="text-blue-500 hover:text-blue-600 text-sm font-semibold">Download</a>
-                            `;
-                            downloadList.appendChild(downloadItem);
-                        } else if (data.state === 'FAILURE') {
-                            clearInterval(poll);
-                            fileItem.querySelector('span:last-child').textContent = 'Failed';
-                            fileItem.classList.add('bg-red-100');
+        function updateFileStatus(fileItem, status, message) {
+            const statusBadge = fileItem.querySelector('.status-badge');
+            const statusDetails = fileItem.querySelector('.status-details');
+
+            // Update status badge
+            statusBadge.className = 'status-badge px-3 py-1 text-sm font-medium rounded-full ';
+            switch(status) {
+                case 'success':
+                    statusBadge.className += 'bg-green-100 text-green-800';
+                    break;
+                case 'error':
+                    statusBadge.className += 'bg-red-100 text-red-800';
+                    break;
+                case 'processing':
+                    statusBadge.className += 'bg-blue-100 text-blue-800';
+                    break;
+                default:
+                    statusBadge.className += 'bg-gray-100 text-gray-800';
+            }
+            statusBadge.textContent = status.charAt(0).toUpperCase() + status.slice(1);
+
+            // Update status details
+            if (message) {
+                statusDetails.textContent = message;
+                statusDetails.className = 'status-details text-sm border-l-4 pl-4 ' + 
+                    (status === 'error' ? 'border-red-500 text-red-600' : 'border-blue-500 text-gray-600');
+            }
+        }
+
+        function addProcessingAttempt(fileItem, attemptNum, message) {
+            const processingAttempts = fileItem.querySelector('.processing-attempts');
+            const attemptsList = fileItem.querySelector('.attempts-list');
+            const codeExecution = fileItem.querySelector('.code-execution');
+            const codeBlock = fileItem.querySelector('.code-block');
+            
+            processingAttempts.classList.remove('hidden');
+            
+            const attemptItem = document.createElement('div');
+            attemptItem.className = 'bg-white rounded-lg p-4 shadow-sm';
+            
+            // Create attempt header
+            const attemptHeader = document.createElement('div');
+            attemptHeader.className = 'flex items-center justify-between mb-2';
+            attemptHeader.innerHTML = `
+                <div class="flex items-center space-x-2">
+                    <span class="w-6 h-6 flex items-center justify-center rounded-full bg-blue-100 text-blue-800 text-sm font-medium">
+                        ${attemptNum}
+                    </span>
+                    <span class="text-sm text-gray-500">${new Date().toLocaleTimeString()}</span>
+                </div>
+            `;
+            
+            // Create message content
+            const messageContent = document.createElement('div');
+            messageContent.className = 'text-sm text-gray-600 whitespace-pre-wrap';
+            
+            // Check if message contains code block
+            if (message.includes('```python')) {
+                const parts = message.split('```python');
+                if (parts.length > 1) {
+                    messageContent.textContent = parts[0].trim();
+                    
+                    const codeParts = parts[1].split('```');
+                    if (codeParts.length > 1) {
+                        codeExecution.classList.remove('hidden');
+                        codeBlock.textContent = codeParts[0].trim();
+                        
+                        if (codeParts[1]) {
+                            const afterCode = document.createElement('div');
+                            afterCode.className = 'mt-2';
+                            afterCode.textContent = codeParts[1].trim();
+                            messageContent.appendChild(afterCode);
                         }
-                    });
-            }, 1000);
+                    }
+                }
+            } else {
+                messageContent.textContent = message;
+            }
+            
+            attemptItem.appendChild(attemptHeader);
+            attemptItem.appendChild(messageContent);
+            attemptsList.appendChild(attemptItem);
+            
+            // Scroll to bottom of attempts list
+            attemptsList.scrollTop = attemptsList.scrollHeight;
+        }
+
+        function pollStatus(taskId, fileItem) {
+            fetch(`/status/${taskId}?t=${new Date().getTime()}`)
+            .then(response => response.json())
+            .then(data => {
+                // Extract processing attempt information from output
+                if (data.result && data.result.output) {
+                    const attemptMatch = data.result.output.find(line => line.includes('Processing attempt'));
+                    if (attemptMatch) {
+                        const attemptNum = attemptMatch.match(/Processing attempt (\d+)/)[1];
+                        addProcessingAttempt(fileItem, attemptNum, data.result.output.join('\n'));
+                    }
+                }
+                
+                if (data.state === 'SUCCESS') {
+                    if (data.result && data.result.status === 'success') {
+                        updateFileStatus(fileItem, 'success', `Successfully processed: ${data.result.result_file}`);
+                    } else if (data.result && data.result.status === 'error') {
+                        updateFileStatus(fileItem, 'error', `Error: ${data.result.message}`);
+                    } else {
+                        updateFileStatus(fileItem, 'error', 'Unknown error occurred');
+                    }
+                } else if (data.state === 'PENDING') {
+                    updateFileStatus(fileItem, 'processing', 'Waiting to start processing...');
+                    setTimeout(() => pollStatus(taskId, fileItem), 2000);
+                } else if (data.state === 'STARTED') {
+                    updateFileStatus(fileItem, 'processing', 'Processing file...');
+                    setTimeout(() => pollStatus(taskId, fileItem), 2000);
+                } else {
+                    updateFileStatus(fileItem, 'error', `Task state: ${data.state}`);
+                }
+            })
+            .catch(error => {
+                updateFileStatus(fileItem, 'error', `Error checking status: ${error}`);
+            });
         }
     </script>
 </body>

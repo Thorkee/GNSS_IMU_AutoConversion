@@ -115,6 +115,163 @@ Produces standardized location data in JSONL format:
 }
 ```
 
+## Module Implementation Details
+
+### Core Processing Modules
+
+#### 1. GNSS Processor (`src/gnss_processor.py`)
+The main processing class that orchestrates the entire pipeline:
+- Implements the core `GNSSProcessor` class
+- Handles format detection and conversion routing
+- Provides custom JSON serialization for GNSS-specific data types
+- Implements coordinate conversion utilities
+- Contains the main processing logic for both RINEX and NMEA formats
+- Manages the LLM fallback mechanism
+
+#### 2. Format Converters
+
+##### RINEX Converter (`src/rinex_converter.py`)
+Specialized module for RINEX format processing:
+```python
+def convert_rinex_to_jsonl(input_file, output_file):
+    # Reads RINEX data using georinex
+    obs_data = gr.load(input_file)
+    # Converts to DataFrame
+    df = obs_data.to_dataframe().reset_index()
+    # Adds timestamp_ms
+    df['timestamp_ms'] = df['time'].apply(lambda x: int(x.timestamp() * 1000))
+    # Writes standardized JSONL
+```
+
+##### NMEA Converter (`src/nmea_converter.py`)
+Handles NMEA format processing:
+```python
+def convert_nmea_to_jsonl(input_file, output_file):
+    # Processes NMEA sentences
+    msg = pynmea2.parse(nmea_msg)
+    # Extracts GGA/RMC messages
+    if msg.sentence_type in ['GGA', 'RMC', 'GNS']:
+        record = extract_location_data(msg, timestamp)
+    # Converts to standardized format
+```
+
+#### 3. Location Data Extractors (`src/location_extractor.py`)
+Specialized module for extracting standardized location data:
+
+##### NMEA Location Extraction
+```python
+def extract_nmea_location_data(input_file):
+    # Processes GGA messages
+    if data.get('sentence_type') == 'GGA':
+        record = {
+            'timestamp_ms': data.get('timestamp_ms'),
+            'latitude': latitude,
+            'longitude': longitude,
+            'altitude': float(altitude),
+            'num_satellites': int(num_sats),
+            'hdop': float(horizontal_dil),
+            'quality': int(gps_qual)
+        }
+```
+
+##### RINEX Location Extraction
+```python
+def extract_rinex_location(record):
+    location = {
+        'timestamp_ms': int(record['time'].timestamp() * 1000),
+        'satellite_system': sat_sys,
+        'satellite_number': sat_num,
+        'pseudorange': float(record['C1']),
+        'carrier_phase': float(record['L1']),
+        'doppler': float(record['D1']),
+        'signal_strength': float(record['S1'])
+    }
+```
+
+#### 4. Data Validation (`src/gnss_processor.py`)
+Comprehensive validation implementation:
+
+##### Record Validation
+```python
+def _validate_records(self, records):
+    required_fields = {'timestamp_ms', 'latitude', 'longitude'}
+    numeric_fields = {'latitude', 'longitude', 'altitude', 'hdop', 'speed'}
+    
+    for record in records:
+        # Validates required fields
+        if not all(field in record for field in required_fields):
+            return False
+        # Validates numeric fields
+        for field in numeric_fields:
+            if field in record and record[field] is not None:
+                try:
+                    float(record[field])
+                except (ValueError, TypeError):
+                    return False
+```
+
+##### Location Validation
+```python
+def validate_location_record(record):
+    # Format-specific validation
+    if 'satellite_system' in record:
+        # RINEX format validation
+        required_fields = ['timestamp_ms', 'satellite_system', 'satellite_number']
+        optional_fields = ['pseudorange', 'carrier_phase', 'doppler', 'signal_strength']
+    else:
+        # NMEA format validation
+        required_fields = ['timestamp_ms']
+        optional_fields = ['latitude', 'longitude', 'altitude', 'num_satellites',
+                         'hdop', 'quality', 'speed', 'course']
+```
+
+#### 5. LLM Integration (`src/format_converter.py`)
+Implements the LLM fallback mechanism:
+```python
+def convert_with_llm(input_file, output_file, format_type=None):
+    # Format-specific system messages
+    system_messages = {
+        'RINEX': """Expert RINEX processing instructions...""",
+        'NMEA': """Expert NMEA processing instructions..."""
+    }
+    # Implements retry mechanism
+    # Handles error analysis and feedback
+    # Maximum 10 retry attempts
+```
+
+### Supporting Modules
+
+#### 1. Utility Functions (`src/utils.py`)
+Common utilities used across modules:
+- Custom JSON serialization
+- Coordinate conversion functions
+- Timestamp handling
+- Error logging
+
+#### 2. Data Filtering (`src/filter_location.py`)
+Specialized filtering functionality:
+- Filters invalid records
+- Removes duplicate timestamps
+- Handles missing data
+- Implements quality thresholds
+
+### Module Interactions
+
+1. Data Flow:
+   ```
+   File Upload → Format Detection → Conversion → Location Extraction → Validation → Output
+   ```
+
+2. Error Handling Flow:
+   ```
+   Standard Processing → Validation → [If Failed] → LLM Fallback → Validation → [If Failed] → Retry Loop
+   ```
+
+3. Quality Control Flow:
+   ```
+   Data Input → Format Validation → Field Validation → Numeric Validation → Quality Metrics → Output Validation
+   ```
+
 ## Setup and Dependencies
 
 ### Required Software
