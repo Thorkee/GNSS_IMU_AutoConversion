@@ -1,0 +1,168 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>GNSS Data Converter</title>
+    <link href="https://cdn.jsdelivr.net/npm/tailwindcss@2.2.19/dist/tailwind.min.css" rel="stylesheet">
+    <style>
+        .drop-zone {
+            border: 2px dashed #ccc;
+            border-radius: 4px;
+            padding: 20px;
+            text-align: center;
+            transition: border .3s ease-in-out;
+        }
+        .drop-zone.dragover {
+            border-color: #000;
+            background-color: rgba(0,0,0,0.1);
+        }
+    </style>
+</head>
+<body class="bg-gray-100 min-h-screen">
+    <div class="container mx-auto px-4 py-8">
+        <div class="max-w-2xl mx-auto">
+            <h1 class="text-3xl font-bold text-center mb-8">GNSS Data Converter</h1>
+            
+            <div class="bg-white rounded-lg shadow-lg p-6">
+                <div id="upload-zone" class="drop-zone mb-4">
+                    <p class="text-gray-600 mb-4">Drag and drop your GNSS data files here</p>
+                    <p class="text-sm text-gray-500">or</p>
+                    <button onclick="document.getElementById('file-input').click()" class="mt-2 bg-blue-500 hover:bg-blue-600 text-white font-semibold py-2 px-4 rounded">
+                        Select Files
+                    </button>
+                    <input type="file" id="file-input" class="hidden" multiple>
+                </div>
+
+                <div id="file-list" class="space-y-2"></div>
+                
+                <div id="progress" class="hidden">
+                    <div class="w-full bg-gray-200 rounded-full h-2.5 dark:bg-gray-700 mt-4">
+                        <div id="progress-bar" class="bg-blue-600 h-2.5 rounded-full" style="width: 0%"></div>
+                    </div>
+                    <p id="status" class="text-sm text-gray-600 mt-2 text-center"></p>
+                </div>
+            </div>
+
+            <div id="results" class="mt-8 hidden">
+                <h2 class="text-xl font-semibold mb-4">Processed Files</h2>
+                <div id="download-list" class="space-y-2"></div>
+            </div>
+        </div>
+    </div>
+
+    <script>
+        const uploadZone = document.getElementById('upload-zone');
+        const fileInput = document.getElementById('file-input');
+        const fileList = document.getElementById('file-list');
+        const progress = document.getElementById('progress');
+        const progressBar = document.getElementById('progress-bar');
+        const status = document.getElementById('status');
+        const results = document.getElementById('results');
+        const downloadList = document.getElementById('download-list');
+
+        // Drag and drop handlers
+        ['dragenter', 'dragover', 'dragleave', 'drop'].forEach(eventName => {
+            uploadZone.addEventListener(eventName, preventDefaults, false);
+            document.body.addEventListener(eventName, preventDefaults, false);
+        });
+
+        ['dragenter', 'dragover'].forEach(eventName => {
+            uploadZone.addEventListener(eventName, highlight, false);
+        });
+
+        ['dragleave', 'drop'].forEach(eventName => {
+            uploadZone.addEventListener(eventName, unhighlight, false);
+        });
+
+        uploadZone.addEventListener('drop', handleDrop, false);
+        fileInput.addEventListener('change', handleFiles, false);
+
+        function preventDefaults(e) {
+            e.preventDefault();
+            e.stopPropagation();
+        }
+
+        function highlight(e) {
+            uploadZone.classList.add('dragover');
+        }
+
+        function unhighlight(e) {
+            uploadZone.classList.remove('dragover');
+        }
+
+        function handleDrop(e) {
+            const dt = e.dataTransfer;
+            const files = dt.files;
+            handleFiles({ target: { files: files } });
+        }
+
+        function handleFiles(e) {
+            const files = [...e.target.files];
+            files.forEach(uploadFile);
+        }
+
+        function uploadFile(file) {
+            const formData = new FormData();
+            formData.append('file', file);
+
+            // Add file to list
+            const fileItem = document.createElement('div');
+            fileItem.className = 'flex items-center justify-between bg-gray-50 p-3 rounded';
+            fileItem.innerHTML = `
+                <span class="text-sm text-gray-600">${file.name}</span>
+                <span class="text-xs text-gray-500">Uploading...</span>
+            `;
+            fileList.appendChild(fileItem);
+
+            // Show progress
+            progress.classList.remove('hidden');
+            progressBar.style.width = '0%';
+            status.textContent = 'Uploading...';
+
+            fetch('/upload', {
+                method: 'POST',
+                body: formData
+            })
+            .then(response => response.json())
+            .then(data => {
+                if (data.task_id) {
+                    pollStatus(data.task_id, fileItem);
+                }
+            })
+            .catch(error => {
+                fileItem.querySelector('span:last-child').textContent = 'Error: ' + error;
+                fileItem.classList.add('bg-red-100');
+            });
+        }
+
+        function pollStatus(taskId, fileItem) {
+            const poll = setInterval(() => {
+                fetch(`/status/${taskId}`)
+                    .then(response => response.json())
+                    .then(data => {
+                        if (data.state === 'SUCCESS') {
+                            clearInterval(poll);
+                            fileItem.querySelector('span:last-child').textContent = 'Completed';
+                            fileItem.classList.add('bg-green-100');
+                            
+                            // Add download link
+                            results.classList.remove('hidden');
+                            const downloadItem = document.createElement('div');
+                            downloadItem.className = 'flex items-center justify-between bg-white p-3 rounded shadow';
+                            downloadItem.innerHTML = `
+                                <span class="text-sm text-gray-600">${data.result.result_file}</span>
+                                <a href="/download/${data.result.result_file}" class="text-blue-500 hover:text-blue-600 text-sm font-semibold">Download</a>
+                            `;
+                            downloadList.appendChild(downloadItem);
+                        } else if (data.state === 'FAILURE') {
+                            clearInterval(poll);
+                            fileItem.querySelector('span:last-child').textContent = 'Failed';
+                            fileItem.classList.add('bg-red-100');
+                        }
+                    });
+            }, 1000);
+        }
+    </script>
+</body>
+</html> 
