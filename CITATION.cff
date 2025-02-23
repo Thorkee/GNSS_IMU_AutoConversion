@@ -1,0 +1,17 @@
+cff-version: 1.2.0
+message: "If you use this software, please cite it as below."
+authors:
+  - family-names: "Thorkee"
+    given-names: ""
+title: "GNSS IMU Auto Conversion"
+version: 1.0.0
+date-released: 2025-02-24
+url: "https://github.com/Thorkee/GNSS_IMU_AutoConversion"
+preferred-citation:
+  type: software
+  authors:
+    - family-names: "Thorkee"
+      given-names: ""
+  title: "GNSS IMU Auto Conversion: An Intelligent GNSS Data Format Converter"
+  year: 2025
+  url: "https://github.com/Thorkee/GNSS_IMU_AutoConversion" 

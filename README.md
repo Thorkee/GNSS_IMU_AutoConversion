@@ -129,6 +129,25 @@ The AI can analyze and process various other formats by:
 4. Push to the branch
 5. Create a new Pull Request
 
+## Citation
+
+While this software is free to use, modify, and distribute under the MIT License, we kindly request that you cite this repository in any academic or professional work that uses this toolbox. This helps us track the tool's impact and benefits the research community.
+
+To cite this software in your work:
+
+```bibtex
+@software{gnss_imu_autoconversion,
+  author = {Thorkee},
+  title = {GNSS IMU Auto Conversion: An Intelligent GNSS Data Format Converter},
+  year = {2025},
+  url = {https://github.com/Thorkee/GNSS_IMU_AutoConversion},
+  version = {1.0.0}
+}
+```
+
+Or in text:
+> Thorkee. (2025). GNSS IMU Auto Conversion: An Intelligent GNSS Data Format Converter (Version 1.0.0) [Computer software]. https://github.com/Thorkee/GNSS_IMU_AutoConversion
+
 ## License
 
 MIT License
