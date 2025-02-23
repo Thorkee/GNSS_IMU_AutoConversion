@@ -153,7 +153,7 @@ AZURE_OPENAI_API_VERSION=2024-08-01-preview
 ### Environment Setup
 1. Clone the repository:
    ```bash
-   git clone https://github.com/yourusername/GNSS_IMU_AutoConversion.git
+   git clone https://github.com/Thorkee/GNSS_IMU_AutoConversion.git
    cd GNSS_IMU_AutoConversion
    ```
 
@@ -262,12 +262,16 @@ MIT License - See LICENSE file for details.
 If you use this software in your research, please cite:
 ```bibtex
 @software{gnss_imu_autoconversion,
-  title={GNSS IMU Auto Conversion: An Intelligent GNSS Data Format Converter},
-  author={LIN, Ju and ZHU, Lingyao},
-  year={2025},
-  url={https://github.com/Thorkee/GNSS_IMU_AutoConversion}
+  author = {LIN, Ju and ZHU, Lingyao},
+  title = {GNSS IMU Auto Conversion: An Intelligent GNSS Data Format Converter},
+  year = {2025},
+  url = {https://github.com/Thorkee/GNSS_IMU_AutoConversion},
+  version = {1.0.0}
 }
 ```
+
+Or in text:
+> LIN, Ju and ZHU, Lingyao. (2025). GNSS IMU Auto Conversion: An Intelligent GNSS Data Format Converter (Version 1.0.0) [Computer software]. https://github.com/Thorkee/GNSS_IMU_AutoConversion
 
 ## Features
 
