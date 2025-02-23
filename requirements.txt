@@ -1,0 +1,4 @@
+georinex>=1.13.0
+pynmea2>=1.19.0
+pandas>=1.3.0
+xarray>=2022.3.0 
