@@ -48,4 +48,4 @@ The filtered location data contains the following fields:
 
 ## License
 
-MIT License 
+MIT License
