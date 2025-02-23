@@ -8,6 +8,7 @@ from datetime import datetime
 from decimal import Decimal
 import os
 from dotenv import load_dotenv
+import re
 
 # Load environment variables
 load_dotenv()
@@ -171,24 +172,117 @@ class GNSSProcessor:
                     
         return location_records
 
+    def parse_ubx_line(self, line, structure):
+        """Parse UBX format lines based on AI-identified structure"""
+        try:
+            # UBX messages typically start with μ or 0xB5 0x62
+            if not (line.startswith('μ') or line.startswith('\xb5\xb2')):
+                return None
+                
+            # Extract common UBX fields based on structure
+            fields = structure.get('fields', {})
+            record = {}
+            
+            # Parse timestamp if available
+            if 'timestamp' in fields:
+                timestamp_pos = fields['timestamp']
+                record['timestamp'] = int.from_bytes(line[timestamp_pos:timestamp_pos+8], 'little')
+            
+            # Parse coordinates if available
+            if all(k in fields for k in ['lat', 'lon', 'height']):
+                lat_pos = fields['lat']
+                lon_pos = fields['lon']
+                height_pos = fields['height']
+                
+                record.update({
+                    'latitude': int.from_bytes(line[lat_pos:lat_pos+4], 'little') * 1e-7,
+                    'longitude': int.from_bytes(line[lon_pos:lon_pos+4], 'little') * 1e-7,
+                    'altitude': int.from_bytes(line[height_pos:height_pos+4], 'little') * 1e-3
+                })
+                
+            return record if record else None
+            
+        except Exception:
+            return None
+
+    def parse_generic_line(self, line, structure):
+        """Parse generic format lines based on AI-identified structure"""
+        try:
+            # Get the field structure identified by AI
+            fields = structure.get('fields', {})
+            delimiter = structure.get('delimiter', ',')
+            
+            # Split the line using identified delimiter
+            parts = line.strip().split(delimiter)
+            
+            # Create record based on field positions
+            record = {}
+            
+            for field_name, info in fields.items():
+                position = info.get('position')
+                data_type = info.get('type', 'str')
+                
+                if position is not None and position < len(parts):
+                    value = parts[position]
+                    
+                    # Convert value based on data type
+                    if data_type == 'float':
+                        try:
+                            record[field_name] = float(value)
+                        except ValueError:
+                            continue
+                    elif data_type == 'int':
+                        try:
+                            record[field_name] = int(value)
+                        except ValueError:
+                            continue
+                    elif data_type == 'timestamp':
+                        try:
+                            # Try common timestamp formats
+                            for fmt in ['%Y-%m-%d %H:%M:%S', '%Y%m%d%H%M%S', '%H:%M:%S']:
+                                try:
+                                    record[field_name] = datetime.strptime(value, fmt).isoformat()
+                                    break
+                                except ValueError:
+                                    continue
+                        except Exception:
+                            continue
+                    else:
+                        record[field_name] = value
+            
+            # Only return record if it contains location data
+            if any(k in record for k in ['latitude', 'longitude', 'altitude', 'coordinates']):
+                return record
+            return None
+            
+        except Exception:
+            return None
+
     def process_file(self, input_file):
         """Main method to process GNSS data file"""
-        file_ext = Path(input_file).suffix.lower()
-        
-        # Use predefined processor for known formats
-        if file_ext in self.supported_formats:
-            location_records = self.supported_formats[file_ext](input_file)
-        else:
-            # Analyze unknown format using AI
-            with open(input_file, 'r') as f:
-                sample_content = f.read(1000)
-            analysis = self.analyze_format(sample_content)
-            location_records = self.process_unknown_format(input_file, analysis)
-        
-        # Save to JSONL
-        output_file = str(Path(input_file).with_suffix('.location.jsonl'))
-        with open(output_file, 'w') as f:
-            for record in location_records:
-                f.write(json.dumps(record, default=self.custom_serializer) + '\n')
-        
-        return output_file 
+        try:
+            file_ext = Path(input_file).suffix.lower()
+            
+            # Use predefined processor for known formats
+            if file_ext in self.supported_formats:
+                location_records = self.supported_formats[file_ext](input_file)
+            else:
+                # Analyze unknown format using AI
+                with open(input_file, 'r') as f:
+                    sample_content = f.read(1000)
+                analysis = self.analyze_format(sample_content)
+                location_records = self.process_unknown_format(input_file, analysis)
+            
+            if not location_records:
+                raise ValueError("No valid location records found in the file")
+            
+            # Save to JSONL
+            output_file = str(Path(input_file).with_suffix('.location.jsonl'))
+            with open(output_file, 'w') as f:
+                for record in location_records:
+                    f.write(json.dumps(record, default=self.custom_serializer) + '\n')
+            
+            return output_file
+            
+        except Exception as e:
+            raise Exception(f"Error processing file {input_file}: {str(e)}") 
