@@ -36,13 +36,20 @@ cd GNSS_IMU_AutoConversion
 pip install -r requirements.txt
 ```
 
-3. Set up environment variables in `.env`:
-```env
-AZURE_OPENAI_ENDPOINT=your_endpoint_here
-AZURE_OPENAI_API_KEY=your_api_key_here
-AZURE_OPENAI_ENGINE=your_deployment_name_here
-AZURE_OPENAI_API_VERSION=2023-05-15
-```
+3. Set up environment variables:
+   - Copy `.env.example` to `.env`:
+   ```bash
+   cp .env.example .env
+   ```
+   - Edit `.env` with your API credentials. The application supports various LLM API services:
+     - Azure OpenAI (default)
+     - OpenAI
+     - DeepSeek
+     - Anthropic Claude
+     - Other compatible LLM APIs
+
+   Note: The `.env` file containing your actual API credentials should never be committed to version control.
+   Always use the provided `.env.example` as a template.
 
 ## Running the Application
 
