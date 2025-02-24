@@ -40,69 +40,30 @@ def extract_location_data(input_file, output_file=None):
         if output_file is None:
             output_file = str(input_path.with_suffix('.location.jsonl'))
             
-        total_records = 0
-        valid_records = 0
-        gga_records = 0
-        rmc_records = 0
-        rinex_records = 0
+        # Try standard extraction once
+        print("Attempting standard extraction...")
+        success = False
+        try:
+            # Try NMEA extraction
+            success, records = extract_nmea_location_data(input_file)
+            if not success:
+                # Try RINEX extraction
+                success, records = extract_rinex_location_data(input_file)
+            
+            if success and records:
+                # Write valid location records
+                with open(output_file, 'w') as f:
+                    for record in records:
+                        if validate_location_record(record):
+                            f.write(json.dumps(record) + '\n')
+                print("Standard extraction successful")
+                return output_file
+        except Exception as e:
+            print(f"Standard extraction failed: {str(e)}")
         
-        print("Reading and processing records...")
-        with open(input_file, 'r') as f_in, open(output_file, 'w') as f_out:
-            for line in f_in:
-                total_records += 1
-                try:
-                    record = json.loads(line)
-                    
-                    # Process based on record type
-                    location_record = None
-                    
-                    # Check for NMEA records
-                    if 'sentence_type' in record:
-                        if record['sentence_type'] == 'GGA':
-                            location_record = extract_gga_location(record)
-                            if location_record:
-                                gga_records += 1
-                        elif record['sentence_type'] == 'RMC':
-                            location_record = extract_rmc_location(record)
-                            if location_record:
-                                rmc_records += 1
-                    
-                    # Check for RINEX records
-                    elif 'time' in record and ('C1' in record or 'L1' in record):
-                        location_record = extract_rinex_location(record)
-                        if location_record:
-                            rinex_records += 1
-                    
-                    # Write valid location record
-                    if location_record and is_valid_location(location_record):
-                        f_out.write(json.dumps(location_record) + '\n')
-                        valid_records += 1
-                        
-                        # Print progress every 1000 records
-                        if valid_records % 1000 == 0:
-                            print(f"Processed {valid_records} valid location records...")
-                    
-                except json.JSONDecodeError as e:
-                    print(f"Error decoding JSON at record {total_records}: {str(e)}")
-                    continue
-                except Exception as e:
-                    print(f"Error processing record {total_records}: {str(e)}")
-                    continue
-        
-        # Print summary
-        print("\nLocation Extraction Summary:")
-        print(f"- Total records processed: {total_records}")
-        print(f"- Valid location records: {valid_records}")
-        print(f"- GGA records: {gga_records}")
-        print(f"- RMC records: {rmc_records}")
-        print(f"- RINEX records: {rinex_records}")
-        
-        if valid_records > 0:
-            print(f"\nSuccessfully extracted location data to: {output_file}")
-            return output_file
-        else:
-            print("No valid location records found, attempting LLM extraction...")
-            return extract_with_llm(input_file, output_file)
+        # If standard extraction fails, try LLM extraction
+        print("Standard extraction failed, attempting LLM extraction...")
+        return extract_with_llm(input_file, output_file)
             
     except Exception as e:
         print(f"Error extracting location data: {str(e)}")
@@ -348,8 +309,23 @@ def extract_with_llm(input_file, output_file):
                     
         # Request location extraction from LLM
         messages = [
-            {"role": "system", "content": "You are a helpful assistant that analyzes GNSS data formats and extracts location information."},
-            {"role": "user", "content": f"Here is a sample of the data:\n{chr(10).join(sample_data)}\n\nPlease generate Python code to process this format and extract location data."}
+            {"role": "system", "content": """You are an expert GNSS data extraction AI agent specializing in Python scripting. Your task is to generate robust Python code that processes GNSS data and extracts standardized location records. The generated Python code must:
+1. Be syntactically correct and compatible with Python 3.11.
+2. Return only the Python script enclosed in a code block (```python ... ```) with no additional comments, explanations, or text.
+3. Include error handling that captures any execution errors in a variable named 'execution_errors' and feeds them back to the LLM agent for refinement.
+4. Extract at least the following fields: timestamp_ms, latitude, longitude, altitude (if available), and num_satellites (if available).
+5. Read from the input file path and write to the output file path provided in the code.
+6. DO NOT include example usage or test data in the generated code.
+Return only the Python code following these guidelines."""},
+            {"role": "user", "content": f"""Here's a sample of the data from {input_file}:
+
+{chr(10).join(sample_data)}
+
+Generate Python code to extract location data from this file and save it to {output_file}.
+The code should use these exact file paths:
+INPUT_FILE = "{input_file}"
+OUTPUT_FILE = "{output_file}"
+"""}
         ]
         
         max_attempts = 10
@@ -359,11 +335,20 @@ def extract_with_llm(input_file, output_file):
                     model=os.getenv('AZURE_OPENAI_ENGINE'),
                     messages=messages,
                     temperature=0.7,
-                    max_tokens=2000
+                    max_tokens=10000
                 )
                 
                 # Extract and execute the generated code
                 generated_code = response.choices[0].message.content
+                
+                # Extract code from within code block markers if present
+                if "```python" in generated_code and "```" in generated_code:
+                    # Extract code between ```python and ``` markers
+                    code_start = generated_code.find("```python") + len("```python")
+                    code_end = generated_code.find("```", code_start)
+                    if code_end != -1:
+                        generated_code = generated_code[code_start:code_end].strip()
+                
                 print("\nGenerated code:")
                 print(f"```python\n{generated_code}\n```")
                 

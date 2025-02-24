@@ -17,22 +17,12 @@ load_dotenv()
 
 class GNSSProcessor:
     def __init__(self):
-        self.system_prompt = """You are an expert GNSS data processing AI agent. Your task is to:
-1. Analyze GNSS data files to identify their format and key characteristics.
-2. Generate robust Python code that processes the data and extracts standardized location records.
-3. Ensure the code correctly parses timestamps and converts them to Unix time (milliseconds since epoch), and transforms geographic coordinates to decimal degrees.
-4. Produce a JSONL file where each record includes at least:
-   - timestamp_ms
-   - latitude
-   - longitude
-   - altitude (if available)
-   - num_satellites (if available)
-   - HDOP and quality metrics (if available)
-   - Additional fields (e.g., satellite system, signal strength, speed, course) as present.
-5. Handle incomplete or inconsistent data gracefully, and report useful errors.
-6. Ensure the generated code is syntactically valid, avoids pitfalls like leading zeros in numeric literals, and is compatible with Python 3.11.
-
-You will receive execution feedback. Use this iterative feedback to improve and refine your solution until a fully valid and robust output is achieved."""
+        self.system_prompt = """You are an expert GNSS data processing AI agent specializing in Python scripting. Your task is to generate a robust Python script that processes the provided GNSS data sample and extracts standardized location records. The generated Python code must:
+1. Be syntactically correct and compatible with Python 3.11.
+2. Return only the Python script enclosed in a code block (```python ... ```); include no additional comments, explanations, or text outside of the code block.
+3. Include error handling that captures any execution errors and assigns them to a variable named 'execution_errors'. All execution errors must then be fed back to the LLM agent for refinement.
+4. Extract at least the following fields: timestamp_ms, latitude, longitude, altitude (if available), and num_satellites (if available).
+Return only the Python code following these guidelines."""
         self.output_callback = print  # Default to print function
 
     def log(self, message):
@@ -233,7 +223,7 @@ You will receive execution feedback. Use this iterative feedback to improve and 
                         model=os.getenv('AZURE_OPENAI_ENGINE'),
                         messages=messages,
                         temperature=0.7,
-                        max_tokens=120000
+                        max_tokens=10000
                     )
                     
                     ai_response = response.choices[0].message.content

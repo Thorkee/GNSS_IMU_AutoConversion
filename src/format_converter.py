@@ -64,11 +64,11 @@ def convert_to_jsonl(input_file, output_file=None):
         file_ext = os.path.splitext(input_file)[1].lower()
         print(f"Detected file type: {file_ext}")
         
-        # Try RINEX conversion first for .obs files
+        # Try RINEX conversion once for .obs files
         if file_ext == '.obs':
             print("Attempting RINEX conversion...")
             success = convert_rinex_to_jsonl(input_file, output_file)
-            if success and validate_jsonl(output_file):
+            if success and validate_jsonl(output_file)[0]:
                 print("RINEX conversion successful")
                 return output_file
             print("RINEX conversion failed, attempting LLM fallback...")
@@ -77,11 +77,11 @@ def convert_to_jsonl(input_file, output_file=None):
                 return output_file
             print("RINEX LLM conversion failed")
         
-        # Try NMEA conversion for .nmea files
+        # Try NMEA conversion once for .nmea files
         elif file_ext == '.nmea':
             print("Attempting NMEA conversion...")
             success = convert_nmea_to_jsonl(input_file, output_file)
-            if success and validate_jsonl(output_file):
+            if success and validate_jsonl(output_file)[0]:
                 print("NMEA conversion successful")
                 return output_file
             print("NMEA conversion failed, attempting LLM fallback...")
@@ -90,11 +90,12 @@ def convert_to_jsonl(input_file, output_file=None):
                 return output_file
             print("NMEA LLM conversion failed")
         
-        # For unknown formats, try LLM
-        print("Unknown format, attempting LLM conversion...")
-        success = convert_with_llm(input_file, output_file)
-        if success:
-            return output_file
+        # For unknown formats, try LLM directly
+        else:
+            print("Unknown format, attempting LLM conversion...")
+            success = convert_with_llm(input_file, output_file)
+            if success:
+                return output_file
         
         raise Exception("Failed to convert file to JSONL format")
         
@@ -219,35 +220,30 @@ def convert_with_llm(input_file, output_file, format_type=None):
         
         # Create format-specific system messages
         system_messages = {
-            'RINEX': """You are an expert in processing RINEX observation files. Your task is to generate robust Python code that:
-1. Reads and parses the RINEX observation file.
-2. Extracts key measurement data (e.g., pseudorange, carrier phase, doppler, signal strength) from satellite observations.
-3. Converts any timestamp information into Unix time (milliseconds since epoch).
-4. Outputs a JSONL file where each record contains:
-   - timestamp_ms,
-   - satellite_system (e.g., 'GPS', 'GLONASS'),
-   - satellite_number,
-   - and any available measurements (pseudorange, carrier_phase, doppler, signal_strength).
-Ensure your code handles RINEX-specific data structures and edge cases, and formats all numeric literals as valid decimals without leading zeros to avoid Python syntax errors.""",
-
-            'NMEA': """You are an expert in NMEA data processing. Generate robust Python code that:
-1. Parses NMEA sentences, specifically focusing on GGA and RMC types.
-2. Converts NMEA coordinate formats (e.g., DDMM.MMMMM) into standard decimal degrees.
-3. Extracts essential data such as timestamps, latitude, longitude, altitude, number of satellites, HDOP, and quality indicators (and speed/course from RMC if available).
-4. Outputs the data in JSONL format with required fields:
-   - timestamp_ms,
-   - latitude,
-   - longitude,
-   - and any additional available fields.
-Your code should gracefully handle variations and missing data in NMEA messages.""",
-
-            None: """You are a seasoned GNSS data format expert. Analyze the provided sample data to:
-1. Identify the file format.
-2. Generate Python code to convert the data into JSONL format.
-The JSONL output should include at least:
-   - timestamp_ms (milliseconds since epoch),
-   - and any available GNSS measurements or location data along with quality metrics.
-Your code must be robust and handle errors gracefully, producing clean and valid output."""
+            'RINEX': """You are an expert in processing RINEX observation files. Your task is to generate robust Python code that processes a RINEX observation file to extract key measurement data. The generated Python code must:
+1. Be syntactically correct and compatible with Python 3.11.
+2. Return only the Python script enclosed in a code block (```python ... ```) with no additional comments, explanations, or text.
+3. Include error handling that captures any execution errors in a variable named 'execution_errors' and feeds them back to the LLM agent for refinement.
+4. Extract at least the following fields: timestamp_ms, satellite_system, satellite_number, pseudorange, carrier_phase, doppler, and signal_strength.
+5. Read from the input file path and write to the output file path provided in the code.
+6. DO NOT include example usage or test data in the generated code.
+Return only the Python code following these guidelines.""",
+            'NMEA': """You are an expert in NMEA data processing. Your task is to generate robust Python code that processes NMEA data to extract location information. The generated Python code must:
+1. Be syntactically correct and compatible with Python 3.11.
+2. Return only the Python script enclosed in a code block (```python ... ```) with no additional comments, explanations, or text.
+3. Include error handling that captures any execution errors in a variable named 'execution_errors' and feeds them back to the LLM agent for refinement.
+4. Extract at least the following fields: timestamp_ms, latitude, longitude, altitude (if available), and num_satellites (if available).
+5. Read from the input file path and write to the output file path provided in the code.
+6. DO NOT include example usage or test data in the generated code.
+Return only the Python code following these guidelines.""",
+            None: """You are a seasoned GNSS data format expert. Your task is to analyze the provided sample data and generate robust Python code that converts the data into a standardized JSONL format. The generated Python code must:
+1. Be syntactically correct and compatible with Python 3.11.
+2. Return only the Python script enclosed in a code block (```python ... ```) with no additional comments, explanations, or text.
+3. Include error handling that captures any execution errors in a variable named 'execution_errors' and feeds them back to the LLM agent for refinement.
+4. Extract at least the field timestamp_ms and any available GNSS measurements or location data.
+5. Read from the input file path and write to the output file path provided in the code.
+6. DO NOT include example usage or test data in the generated code.
+Return only the Python code following these guidelines."""
         }
 
         # Select appropriate system message
@@ -265,14 +261,30 @@ Your code must be robust and handle errors gracefully, producing clean and valid
                     model=os.getenv('AZURE_OPENAI_ENGINE'),
                     messages=[
                         {"role": "system", "content": system_message},
-                        {"role": "user", "content": f"Here's a sample of the data:\n{sample_data}\n\nGenerate Python code to convert this data to JSONL format."}
+                        {"role": "user", "content": f"""Here's a sample of the data from {input_file}:
+
+{sample_data}
+
+Generate Python code to convert this data to JSONL format and save it to {output_file}.
+The code should use these exact file paths:
+INPUT_FILE = "{input_file}"
+OUTPUT_FILE = "{output_file}"
+"""}
                     ],
                     temperature=0.7,
-                    max_tokens=120000
+                    max_tokens=10000
                 )
                 
                 # Extract the generated code
                 generated_code = response.choices[0].message.content
+                
+                # Extract code from within code block markers if present
+                if "```python" in generated_code and "```" in generated_code:
+                    # Extract code between ```python and ``` markers
+                    code_start = generated_code.find("```python") + len("```python")
+                    code_end = generated_code.find("```", code_start)
+                    if code_end != -1:
+                        generated_code = generated_code[code_start:code_end].strip()
                 
                 # Execute the generated code
                 exec(generated_code)

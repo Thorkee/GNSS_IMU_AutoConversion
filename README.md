@@ -341,47 +341,39 @@ AZURE_OPENAI_API_VERSION=2024-08-01-preview
 
 1. Start Redis server:
    ```bash
-   redis-server
+   redis-server --port 6383
    ```
 
-2. Start Celery worker (in a new terminal):
+2. Start Celery worker:
    ```bash
-   export PYTHONPATH="${PYTHONPATH}:${PWD}/src"  # On Unix/macOS
-   # or
-   set PYTHONPATH=%PYTHONPATH%;%CD%\src  # On Windows
-   celery -A app.celery worker --loglevel=info
+   export REDIS_PORT=6383 && celery -A app.celery worker --loglevel=info
    ```
 
-3. Start Flask application (in a new terminal):
+3. Start Flask application:
    ```bash
-   export PYTHONPATH="${PYTHONPATH}:${PWD}/src"  # On Unix/macOS
-   # or
-   set PYTHONPATH=%PYTHONPATH%;%CD%\src  # On Windows
-   PORT=5005 python3.11 app.py
+   export REDIS_PORT=6383 && export PYTHONPATH="${PYTHONPATH}:${PWD}/src" && PORT=5010 python3 app.py
    ```
 
-4. Access the web interface at http://127.0.0.1:5005
+The application will be accessible at http://127.0.0.1:5010
 
 ### Troubleshooting
 
-1. Port conflicts:
-   - If Redis fails to start: `pkill redis-server`
-   - If Flask port is in use: Change port using `PORT=xxxx`
-   - If Celery worker fails: `pkill -f "celery"`
+### Common Issues
 
-2. Python path issues:
-   - Ensure PYTHONPATH includes the src directory
-   - Check imports in Python files use correct paths
+1. Redis Port Conflicts
+   - Check if Redis is already running on the port
+   - Use `lsof -ti:6383 | xargs kill -9` to free the port
+   - Restart Redis server
 
-3. OpenAI API issues:
-   - Verify Azure OpenAI credentials in .env
-   - Check API version compatibility
-   - Monitor token limits in requests
+2. File Processing Errors
+   - Verify file encoding (UTF-8 recommended)
+   - Check file permissions
+   - Ensure proper format of input files
 
-4. Data processing issues:
-   - Check input file format compatibility
-   - Monitor Celery worker logs for errors
-   - Verify file permissions in uploads directory
+3. Task Queue Issues
+   - Verify Redis connection
+   - Check Celery worker status
+   - Review task logs for errors
 
 ## Error Handling
 
@@ -483,22 +475,22 @@ pip install -r requirements.txt
 
 ## Running the Application
 
-1. Start Redis server (required for Celery):
+1. Start Redis server:
 ```bash
-redis-server
+redis-server --port 6383
 ```
 
 2. Start Celery worker:
 ```bash
-celery -A app.celery worker --loglevel=info
+export REDIS_PORT=6383 && celery -A app.celery worker --loglevel=info
 ```
 
 3. Start the Flask application:
 ```bash
-python app.py
+export REDIS_PORT=6383 && export PYTHONPATH="${PYTHONPATH}:${PWD}/src" && PORT=5010 python3 app.py
 ```
 
-The web interface will be available at `http://localhost:5000`
+The application will be accessible at http://127.0.0.1:5010
 
 ## Output Format
 
@@ -568,3 +560,22 @@ MIT License - See LICENSE file for details.
 - Azure OpenAI for format detection
 - georinex for RINEX file processing
 - pynmea2 for NMEA file processing
+
+## Recent Updates
+
+### Configuration Changes
+- Redis port configuration updated to use port 6383
+- Flask application configured to run on port 5010
+- Maximum tokens for LLM requests adjusted to comply with model limits (16384 tokens)
+
+### Bug Fixes
+- Fixed issues with Redis port conflicts
+- Improved error handling in NMEA file processing
+- Enhanced LLM-assisted format conversion reliability
+- Added better validation for location data extraction
+
+### Performance Improvements
+- Optimized file processing pipeline
+- Enhanced error recovery in format conversion
+- Improved task queue management with Celery
+- Better handling of UTF-8 encoded NMEA files

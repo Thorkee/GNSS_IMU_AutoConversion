@@ -31,6 +31,39 @@
             white-space: pre-wrap;
             word-break: break-word;
         }
+        .processing-attempts {
+            max-height: 300px;
+            overflow-y: auto;
+            margin-top: 1rem;
+        }
+        
+        .attempts-list {
+            display: flex;
+            flex-direction: column;
+            gap: 0.75rem;
+        }
+        
+        .attempts-list > div {
+            border-left: 4px solid transparent;
+            transition: all 0.2s ease;
+        }
+        
+        .attempts-list > div:has(.text-gray-600:contains('succeeded')) {
+            border-left-color: #10B981;  /* green-500 */
+        }
+        
+        .attempts-list > div:has(.text-gray-600:contains('failed')) {
+            border-left-color: #EF4444;  /* red-500 */
+        }
+        
+        .status-badge {
+            transition: all 0.2s ease;
+        }
+        
+        .status-details {
+            margin-top: 0.5rem;
+            transition: all 0.2s ease;
+        }
     </style>
 </head>
 <body class="bg-gray-100 min-h-screen">
@@ -165,23 +198,32 @@
         function updateFileStatus(fileItem, status, message) {
             const statusBadge = fileItem.querySelector('.status-badge');
             const statusDetails = fileItem.querySelector('.status-details');
+            const processingAttempts = fileItem.querySelector('.processing-attempts');
 
             // Update status badge
             statusBadge.className = 'status-badge px-3 py-1 text-sm font-medium rounded-full ';
             switch(status) {
-                case 'success':
+                case 'uploading':
+                    statusBadge.className += 'bg-blue-100 text-blue-800';
+                    statusBadge.textContent = 'Uploading';
+                    break;
+                case 'uploaded':
                     statusBadge.className += 'bg-green-100 text-green-800';
+                    statusBadge.textContent = 'Uploaded';
+                    break;
+                case 'processing':
+                    statusBadge.className += 'bg-yellow-100 text-yellow-800';
+                    statusBadge.textContent = 'Processing';
+                    break;
+                case 'completed':
+                    statusBadge.className += 'bg-green-100 text-green-800';
+                    statusBadge.textContent = 'Completed';
                     break;
                 case 'error':
                     statusBadge.className += 'bg-red-100 text-red-800';
+                    statusBadge.textContent = 'Error';
                     break;
-                case 'processing':
-                    statusBadge.className += 'bg-blue-100 text-blue-800';
-                    break;
-                default:
-                    statusBadge.className += 'bg-gray-100 text-gray-800';
             }
-            statusBadge.textContent = status.charAt(0).toUpperCase() + status.slice(1);
 
             // Update status details
             if (message) {
@@ -194,94 +236,106 @@
         function addProcessingAttempt(fileItem, attemptNum, message) {
             const processingAttempts = fileItem.querySelector('.processing-attempts');
             const attemptsList = fileItem.querySelector('.attempts-list');
-            const codeExecution = fileItem.querySelector('.code-execution');
-            const codeBlock = fileItem.querySelector('.code-block');
             
-            processingAttempts.classList.remove('hidden');
-            
-            const attemptItem = document.createElement('div');
-            attemptItem.className = 'bg-white rounded-lg p-4 shadow-sm';
-            
-            // Create attempt header
-            const attemptHeader = document.createElement('div');
-            attemptHeader.className = 'flex items-center justify-between mb-2';
-            attemptHeader.innerHTML = `
-                <div class="flex items-center space-x-2">
-                    <span class="w-6 h-6 flex items-center justify-center rounded-full bg-blue-100 text-blue-800 text-sm font-medium">
-                        ${attemptNum}
-                    </span>
-                    <span class="text-sm text-gray-500">${new Date().toLocaleTimeString()}</span>
-                </div>
-            `;
-            
-            // Create message content
-            const messageContent = document.createElement('div');
-            messageContent.className = 'text-sm text-gray-600 whitespace-pre-wrap';
-            
-            // Check if message contains code block
-            if (message.includes('```python')) {
-                const parts = message.split('```python');
-                if (parts.length > 1) {
-                    messageContent.textContent = parts[0].trim();
-                    
-                    const codeParts = parts[1].split('```');
-                    if (codeParts.length > 1) {
-                        codeExecution.classList.remove('hidden');
-                        codeBlock.textContent = codeParts[0].trim();
-                        
-                        if (codeParts[1]) {
-                            const afterCode = document.createElement('div');
-                            afterCode.className = 'mt-2';
-                            afterCode.textContent = codeParts[1].trim();
-                            messageContent.appendChild(afterCode);
-                        }
-                    }
+            // Only show processing attempts for LLM processing
+            if (message.includes('LLM') || message.includes('Standard')) {
+                processingAttempts.classList.remove('hidden');
+                
+                const attemptItem = document.createElement('div');
+                attemptItem.className = 'bg-white rounded-lg p-4 shadow-sm';
+                
+                // Create attempt header with timestamp
+                const attemptHeader = document.createElement('div');
+                attemptHeader.className = 'flex items-center justify-between mb-2';
+                
+                // Format the header based on the type of message
+                if (message.includes('Standard')) {
+                    attemptHeader.innerHTML = `
+                        <div class="flex items-center space-x-2">
+                            <span class="text-sm font-medium text-gray-700">Standard Processing</span>
+                            <span class="text-sm text-gray-500">${new Date().toLocaleTimeString()}</span>
+                        </div>
+                    `;
+                } else {
+                    attemptHeader.innerHTML = `
+                        <div class="flex items-center space-x-2">
+                            <span class="w-6 h-6 flex items-center justify-center rounded-full bg-yellow-100 text-yellow-800 text-sm font-medium">
+                                ${attemptNum}
+                            </span>
+                            <span class="text-sm font-medium text-gray-700">LLM Attempt</span>
+                            <span class="text-sm text-gray-500">${new Date().toLocaleTimeString()}</span>
+                        </div>
+                    `;
                 }
-            } else {
-                messageContent.textContent = message;
+                
+                // Create message content
+                const messageContent = document.createElement('div');
+                messageContent.className = 'text-sm text-gray-600';
+                
+                // Clean up and format the message
+                let cleanMessage = message;
+                if (message.includes('Standard')) {
+                    cleanMessage = message.includes('failed') ? 
+                        'Standard processing failed. Switching to LLM processing.' :
+                        'Standard processing succeeded.';
+                } else if (message.includes('LLM')) {
+                    cleanMessage = message.replace(/Attempt \d+ (failed|succeeded):?\s*/, '')
+                        .replace(/\s*\(.*?\)/, '');
+                }
+                
+                messageContent.textContent = cleanMessage;
+                
+                attemptItem.appendChild(attemptHeader);
+                attemptItem.appendChild(messageContent);
+                attemptsList.appendChild(attemptItem);
+                
+                // Scroll to bottom of attempts list
+                attemptsList.scrollTop = attemptsList.scrollHeight;
             }
-            
-            attemptItem.appendChild(attemptHeader);
-            attemptItem.appendChild(messageContent);
-            attemptsList.appendChild(attemptItem);
-            
-            // Scroll to bottom of attempts list
-            attemptsList.scrollTop = attemptsList.scrollHeight;
         }
 
         function pollStatus(taskId, fileItem) {
-            fetch(`/status/${taskId}?t=${new Date().getTime()}`)
+            fetch(`/status/${taskId}`)
             .then(response => response.json())
             .then(data => {
-                // Extract processing attempt information from output
-                if (data.result && data.result.output) {
-                    const attemptMatch = data.result.output.find(line => line.includes('Processing attempt'));
-                    if (attemptMatch) {
-                        const attemptNum = attemptMatch.match(/Processing attempt (\d+)/)[1];
-                        addProcessingAttempt(fileItem, attemptNum, data.result.output.join('\n'));
-                    }
-                }
-                
                 if (data.state === 'SUCCESS') {
-                    if (data.result && data.result.status === 'success') {
-                        updateFileStatus(fileItem, 'success', `Successfully processed: ${data.result.result_file}`);
-                    } else if (data.result && data.result.status === 'error') {
-                        updateFileStatus(fileItem, 'error', `Error: ${data.result.message}`);
+                    if (data.result.status === 'success') {
+                        updateFileStatus(fileItem, 'completed', 'Processing complete');
+                        // Add download button
+                        const downloadBtn = document.createElement('button');
+                        downloadBtn.className = 'bg-green-500 hover:bg-green-600 text-white font-semibold py-2 px-4 rounded ml-4';
+                        downloadBtn.textContent = 'Download Results';
+                        downloadBtn.onclick = () => {
+                            const link = document.createElement('a');
+                            link.href = `/download/${data.result.result_file}`;
+                            link.download = data.result.result_file;
+                            document.body.appendChild(link);
+                            link.click();
+                            document.body.removeChild(link);
+                        };
+                        fileItem.querySelector('.flex.items-center.justify-between').appendChild(downloadBtn);
                     } else {
-                        updateFileStatus(fileItem, 'error', 'Unknown error occurred');
+                        updateFileStatus(fileItem, 'error', data.result.message || 'Processing failed');
                     }
                 } else if (data.state === 'PENDING') {
-                    updateFileStatus(fileItem, 'processing', 'Waiting to start processing...');
-                    setTimeout(() => pollStatus(taskId, fileItem), 2000);
-                } else if (data.state === 'STARTED') {
-                    updateFileStatus(fileItem, 'processing', 'Processing file...');
-                    setTimeout(() => pollStatus(taskId, fileItem), 2000);
+                    updateFileStatus(fileItem, 'uploaded', 'Initializing processing...');
+                    setTimeout(() => pollStatus(taskId, fileItem), 1000);
+                } else if (data.state === 'PROGRESS') {
+                    updateFileStatus(fileItem, 'processing', 'Processing in progress...');
+                    if (data.result.output) {
+                        data.result.output.forEach((msg, idx) => {
+                            if (msg.includes('Standard') || msg.includes('LLM')) {
+                                addProcessingAttempt(fileItem, idx + 1, msg);
+                            }
+                        });
+                    }
+                    setTimeout(() => pollStatus(taskId, fileItem), 1000);
                 } else {
-                    updateFileStatus(fileItem, 'error', `Task state: ${data.state}`);
+                    updateFileStatus(fileItem, 'error', 'Task failed');
                 }
             })
             .catch(error => {
-                updateFileStatus(fileItem, 'error', `Error checking status: ${error}`);
+                updateFileStatus(fileItem, 'error', 'Error checking status: ' + error);
             });
         }
     </script>
