@@ -1,6 +1,8 @@
-# GNSS Data Processing System
+# GNSS/IMU Data Processing System
 
-A robust system for processing various GNSS (Global Navigation Satellite System) data formats, with automatic format detection and conversion capabilities.
+**UNDER DEVELOPMENT, CONTACT JU.LIN@CONNECT.POLYU.HK FOR INQUIRIES**
+
+A robust system for processing various GNSS and IMU data formats, with automatic format detection and conversion capabilities.
 
 ## System Architecture
 
