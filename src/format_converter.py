@@ -9,6 +9,7 @@ import openai
 import os
 from dotenv import load_dotenv
 from openai import AzureOpenAI
+import math
 
 # Load environment variables
 load_dotenv()
@@ -17,7 +18,7 @@ load_dotenv()
 client = AzureOpenAI(
     api_key=os.getenv('AZURE_OPENAI_API_KEY'),
     api_version=os.getenv('AZURE_OPENAI_API_VERSION'),
-    base_url=os.getenv('AZURE_OPENAI_ENDPOINT')
+    base_url=f"{os.getenv('AZURE_OPENAI_ENDPOINT')}/deployments/{os.getenv('AZURE_OPENAI_ENGINE')}"
 )
 
 def custom_serializer(obj):
@@ -109,7 +110,9 @@ def convert_rinex_to_jsonl(input_file, output_file):
     """Convert RINEX observation file to JSONL format"""
     try:
         print(f"Reading RINEX file: {input_file}")
-        obs_data = gr.load(input_file)
+        
+        # Load RINEX data with multi-system support
+        obs_data = gr.load(input_file, use='G,R,E,C,J')  # GPS, GLONASS, Galileo, BeiDou, QZSS
         
         print("Converting RINEX data to DataFrame...")
         df = obs_data.to_dataframe().reset_index()
@@ -119,18 +122,49 @@ def convert_rinex_to_jsonl(input_file, output_file):
         record_count = 0
         with open(output_file, 'w') as f:
             for record in df.to_dict(orient='records'):
-                if 'time' in record:
-                    try:
-                        # Use pandas Timestamp to convert time field to a Python datetime
-                        ts = pd.Timestamp(record['time'])
-                        record['timestamp_ms'] = int(ts.timestamp() * 1000)
-                    except Exception as e:
-                        print(f"Warning: Failed to convert time field: {e}")
+                try:
+                    # Extract timestamp
+                    if 'time' in record:
+                        try:
+                            ts = pd.Timestamp(record['time'])
+                            record['timestamp_ms'] = int(ts.timestamp() * 1000)
+                        except Exception as e:
+                            print(f"Warning: Failed to convert time field: {e}")
+                            record['timestamp_ms'] = int(datetime.now().timestamp() * 1000)
+                    else:
                         record['timestamp_ms'] = int(datetime.now().timestamp() * 1000)
-                else:
-                    record['timestamp_ms'] = int(datetime.now().timestamp() * 1000)
-                f.write(json.dumps(record, default=custom_serializer) + '\n')
-                record_count += 1
+                    
+                    # Extract satellite system and number
+                    if 'sv' in record:
+                        sv = str(record['sv'])
+                        if sv:
+                            record['satellite_system'] = sv[0] if len(sv) > 0 else None
+                            record['satellite_number'] = sv[1:] if len(sv) > 1 else None
+                    
+                    # Extract measurements
+                    measurements = {}
+                    for key in record:
+                        # Handle different observation types
+                        if any(key.startswith(prefix) for prefix in ['C', 'L', 'D', 'S']):
+                            value = record[key]
+                            if pd.notna(value) and not math.isinf(float(value)):
+                                measurements[key] = float(value)
+                    
+                    # Add measurements to record
+                    if measurements:
+                        record['measurements'] = measurements
+                    
+                    # Write valid record
+                    f.write(json.dumps(record, default=custom_serializer) + '\n')
+                    record_count += 1
+                    
+                    # Print progress
+                    if record_count % 1000 == 0:
+                        print(f"Processed {record_count} records...")
+                        
+                except Exception as e:
+                    print(f"Warning: Failed to process record: {e}")
+                    continue
         
         print(f"Successfully wrote {record_count} RINEX records to JSONL")
         return True
@@ -148,18 +182,50 @@ def convert_nmea_to_jsonl(input_file, output_file):
         gga_count = 0
         rmc_count = 0
         
-        with open(input_file, 'r') as nmea_file, open(output_file, 'w') as jsonl_file:
-            for line in nmea_file:
+        # Try different encodings
+        encodings = ['utf-8', 'latin1', 'ascii']
+        nmea_data = None
+        
+        for encoding in encodings:
+            try:
+                with open(input_file, 'rb') as f:
+                    nmea_data = f.read().decode(encoding)
+                break
+            except UnicodeDecodeError:
+                continue
+                
+        if nmea_data is None:
+            # If all encodings fail, try reading line by line ignoring errors
+            with open(input_file, 'rb') as f:
+                nmea_data = f.read().decode('utf-8', errors='ignore')
+        
+        # Split into lines and process
+        lines = nmea_data.splitlines()
+        with open(output_file, 'w') as jsonl_file:
+            for line in lines:
                 total_count += 1
                 try:
-                    # Split line to separate NMEA message and timestamp
-                    parts = line.strip().split(',')
-                    if len(parts) > 1:
-                        # Reconstruct NMEA message without timestamp
-                        nmea_msg = ','.join(parts[:-1])
-                        timestamp = int(parts[-1]) if parts[-1].isdigit() else None
+                    # Clean the line
+                    line = line.strip()
+                    if not line:
+                        continue
                         
-                        # Parse NMEA message
+                    # Handle lines with or without timestamp
+                    parts = line.split(',')
+                    if len(parts) > 1:
+                        # Check if last part could be timestamp
+                        if parts[-1].isdigit() and len(parts[-1]) >= 13:  # Looks like a millisecond timestamp
+                            timestamp = int(parts[-1])
+                            nmea_msg = ','.join(parts[:-1])
+                        else:
+                            timestamp = None
+                            nmea_msg = line
+                    else:
+                        timestamp = None
+                        nmea_msg = line
+                    
+                    # Parse NMEA message
+                    if nmea_msg.startswith('$'):
                         msg = pynmea2.parse(nmea_msg)
                         
                         # Track message types
@@ -173,15 +239,15 @@ def convert_nmea_to_jsonl(input_file, output_file):
                         jsonl_file.write(json.dumps(data, default=custom_serializer) + '\n')
                         valid_count += 1
                         
-                        # Print progress every 1000 messages
-                        if valid_count % 1000 == 0:
-                            print(f"Processed {valid_count} valid messages...")
-                        
                 except pynmea2.ParseError:
                     continue
                 except Exception as e:
-                    print(f"Error processing line: {e}")
+                    print(f"Error processing line: {str(e)}")
                     continue
+                
+                # Print progress every 1000 messages
+                if valid_count % 1000 == 0:
+                    print(f"Processed {valid_count} valid messages...")
         
         print(f"NMEA Processing Summary:")
         print(f"- Total lines processed: {total_count}")
@@ -210,103 +276,110 @@ def convert_with_llm(input_file, output_file, format_type=None):
     """Convert unknown format to JSONL using LLM"""
     try:
         print("Starting LLM-based conversion...")
-        print("Read sample data for analysis")
+        print("Reading sample data for analysis")
         
-        # Read first few bytes of the file
-        with open(input_file, 'r') as f:
-            sample_data = f.read(1000)  # Read first 1000 bytes
-            
+        # Try different encodings for reading sample data
+        sample_data = None
+        encodings = ['utf-8', 'latin1', 'ascii']
+        
+        for encoding in encodings:
+            try:
+                with open(input_file, 'rb') as f:
+                    # Read first 15 lines or 2000 bytes, whichever comes first
+                    lines = []
+                    bytes_read = 0
+                    for _ in range(15):
+                        line = f.readline()
+                        if not line:
+                            break
+                        bytes_read += len(line)
+                        if bytes_read > 2000:
+                            break
+                        try:
+                            decoded_line = line.decode(encoding)
+                            lines.append(decoded_line)
+                        except UnicodeDecodeError:
+                            continue
+                    sample_data = ''.join(lines)
+                if sample_data:
+                    break
+            except Exception:
+                continue
+                
+        if not sample_data:
+            # If all encodings fail, try reading with ignore errors
+            with open(input_file, 'rb') as f:
+                sample_data = f.read(2000).decode('utf-8', errors='ignore')
+        
         print("Requesting format analysis from LLM...")
         
         # Create format-specific system messages
         system_messages = {
-            'RINEX': """You are an expert in processing RINEX observation files. Your task is to generate robust Python code that processes a RINEX observation file to extract key measurement data. The generated Python code must:
-1. Be syntactically correct and compatible with Python 3.11.
-2. Return only the Python script enclosed in a code block (```python ... ```) with no additional comments, explanations, or text.
-3. Include error handling that captures any execution errors in a variable named 'execution_errors' and feeds them back to the LLM agent for refinement.
-4. Extract at least the following fields: timestamp_ms, satellite_system, satellite_number, pseudorange, carrier_phase, doppler, and signal_strength.
-5. Read from the input file path and write to the output file path provided in the code.
-6. DO NOT include example usage or test data in the generated code.
-Return only the Python code following these guidelines.""",
-            'NMEA': """You are an expert in NMEA data processing. Your task is to generate robust Python code that processes NMEA data to extract location information. The generated Python code must:
-1. Be syntactically correct and compatible with Python 3.11.
-2. Return only the Python script enclosed in a code block (```python ... ```) with no additional comments, explanations, or text.
-3. Include error handling that captures any execution errors in a variable named 'execution_errors' and feeds them back to the LLM agent for refinement.
-4. Extract at least the following fields: timestamp_ms, latitude, longitude, altitude (if available), and num_satellites (if available).
-5. Read from the input file path and write to the output file path provided in the code.
-6. DO NOT include example usage or test data in the generated code.
-Return only the Python code following these guidelines.""",
-            None: """You are a seasoned GNSS data format expert. Your task is to analyze the provided sample data and generate robust Python code that converts the data into a standardized JSONL format. The generated Python code must:
-1. Be syntactically correct and compatible with Python 3.11.
-2. Return only the Python script enclosed in a code block (```python ... ```) with no additional comments, explanations, or text.
-3. Include error handling that captures any execution errors in a variable named 'execution_errors' and feeds them back to the LLM agent for refinement.
-4. Extract at least the field timestamp_ms and any available GNSS measurements or location data.
-5. Read from the input file path and write to the output file path provided in the code.
-6. DO NOT include example usage or test data in the generated code.
-Return only the Python code following these guidelines."""
+            'RINEX': """You are an expert in processing RINEX observation files. Generate Python code that:
+1. Processes RINEX data to extract: timestamp_ms, satellite_system, satellite_number, pseudorange, carrier_phase, doppler, signal_strength
+2. Handles different RINEX versions and satellite systems (GPS, GLONASS, Galileo, BeiDou)
+3. Includes robust error handling and validation
+4. Returns only the Python code block with no additional text""",
+            
+            'NMEA': """You are an expert in NMEA data processing. Generate Python code that:
+1. Processes NMEA sentences (GGA, RMC, GSA, GSV, etc.)
+2. Extracts: timestamp_ms, latitude, longitude, altitude, speed, course, num_satellites, hdop, fix_quality
+3. Handles different NMEA message types and formats
+4. Includes checksum validation and error handling
+5. Returns only the Python code block with no additional text""",
+            
+            None: """You are a GNSS data format expert. Analyze the sample data and generate Python code that:
+1. Identifies the format and extracts all relevant GNSS measurements
+2. Handles binary and text formats with appropriate encoding
+3. Extracts at minimum: timestamp_ms and any available position/measurement data
+4. Includes format-specific validation and error handling
+5. Returns only the Python code block with no additional text"""
         }
-
+        
         # Select appropriate system message
         system_message = system_messages.get(format_type, system_messages[None])
         
-        # Maximum retry attempts
-        max_attempts = 10
-        attempt = 0
-        last_error = None
-        
-        while attempt < max_attempts:
-            try:
-                # Request format analysis and conversion code from LLM
-                response = client.chat.completions.create(
-                    model=os.getenv('AZURE_OPENAI_ENGINE'),
-                    messages=[
-                        {"role": "system", "content": system_message},
-                        {"role": "user", "content": f"""Here's a sample of the data from {input_file}:
-
+        # Prepare user message with sample data and file paths
+        user_message = f"""Sample data from the file:
 {sample_data}
 
-Generate Python code to convert this data to JSONL format and save it to {output_file}.
-The code should use these exact file paths:
-INPUT_FILE = "{input_file}"
-OUTPUT_FILE = "{output_file}"
-"""}
-                    ],
-                    temperature=0.7,
-                    max_tokens=10000
-                )
-                
-                # Extract the generated code
-                generated_code = response.choices[0].message.content
-                
-                # Extract code from within code block markers if present
-                if "```python" in generated_code and "```" in generated_code:
-                    # Extract code between ```python and ``` markers
-                    code_start = generated_code.find("```python") + len("```python")
-                    code_end = generated_code.find("```", code_start)
-                    if code_end != -1:
-                        generated_code = generated_code[code_start:code_end].strip()
-                
-                # Execute the generated code
-                exec(generated_code)
-                
-                # Validate the output
-                is_valid, valid_count, total_count = validate_jsonl(output_file)
-                if is_valid:
-                    print(f"Successfully converted {valid_count}/{total_count} records")
-                    return True
-                
-                print(f"Validation failed: {valid_count}/{total_count} valid records")
-                last_error = f"Generated code produced {valid_count}/{total_count} valid records"
-                
-            except Exception as e:
-                print(f"Attempt {attempt + 1} failed: {str(e)}")
-                last_error = str(e)
-            
-            attempt += 1
+Generate Python code to process this data format. The code should:
+1. Read from '{input_file}'
+2. Write to '{output_file}' in JSONL format
+3. Extract all relevant GNSS data
+4. Handle errors and edge cases
+5. Include validation of extracted data
+
+Return only the Python code block."""
+
+        # Make API call with reduced tokens and temperature
+        response = client.chat.completions.create(
+            model=os.getenv('AZURE_OPENAI_MODEL'),
+            messages=[
+                {"role": "system", "content": system_message},
+                {"role": "user", "content": user_message}
+            ],
+            temperature=0.3,
+            max_tokens=10000
+        )
         
-        print(f"Failed to generate valid output after {max_attempts} attempts")
-        if last_error:
-            print(f"Last error: {last_error}")
+        # Extract and execute the generated code
+        generated_code = response.choices[0].message.content
+        if '```python' in generated_code:
+            code_block = generated_code.split('```python')[1].split('```')[0]
+        else:
+            code_block = generated_code
+            
+        print("\nExecuting generated code...")
+        exec(code_block)
+        
+        # Validate the output file
+        if os.path.exists(output_file):
+            is_valid, valid_count, total_count = validate_jsonl(output_file)
+            if is_valid:
+                print(f"Successfully converted file with {valid_count}/{total_count} valid records")
+                return True
+                
         return False
         
     except Exception as e:

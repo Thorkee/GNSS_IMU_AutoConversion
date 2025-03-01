@@ -11,25 +11,48 @@ load_dotenv()
 client = AzureOpenAI(
     api_key=os.getenv('AZURE_OPENAI_API_KEY'),
     api_version=os.getenv('AZURE_OPENAI_API_VERSION'),
-    base_url=os.getenv('AZURE_OPENAI_ENDPOINT')
+    base_url=f"{os.getenv('AZURE_OPENAI_ENDPOINT')}/deployments/{os.getenv('AZURE_OPENAI_ENGINE')}"
 )
 
 def validate_location_records(records):
-    """Validate if location records have required fields for FGO"""
-    required_fields = {
-        'nmea': ['timestamp_ms', 'latitude', 'longitude'],
-        'rinex': ['timestamp_ms', 'satellite_system', 'satellite_number', 'pseudorange']
-    }
-    
+    """Validate if location records have useful positioning data for FGO"""
     if not records:
         return False
         
-    # Detect record type based on fields
-    record_type = 'rinex' if 'satellite_system' in records[0] else 'nmea'
-    required = required_fields[record_type]
+    # Basic validation - each record should be a dictionary
+    if not all(isinstance(record, dict) for record in records):
+        return False
     
-    # Check if all records have required fields
-    return all(all(field in record for field in required) for record in records)
+    # Each record should have at least a timestamp
+    if not all('timestamp_ms' in record for record in records):
+        return False
+    
+    # Each record should have some form of positioning data
+    positioning_fields = {
+        'location': ['latitude', 'longitude', 'altitude'],
+        'gnss': ['satellite_system', 'satellite_number', 'pseudorange', 'carrier_phase'],
+        'quality': ['hdop', 'pdop', 'num_satellites', 'fix_type', 'quality', 'accuracy'],
+        'motion': ['speed', 'course', 'heading', 'velocity']
+    }
+    
+    # Record should contain at least one field from location OR gnss categories
+    # and optionally fields from quality/motion categories
+    for record in records:
+        has_location = any(field in record for field in positioning_fields['location'])
+        has_gnss = any(field in record for field in positioning_fields['gnss'])
+        if not (has_location or has_gnss):
+            return False
+            
+        # Validate numeric fields if present
+        for category in positioning_fields.values():
+            for field in category:
+                if field in record and record[field] is not None:
+                    try:
+                        float(record[field])
+                    except (ValueError, TypeError):
+                        return False
+    
+    return True
 
 def extract_location_data(input_file, output_file=None):
     """Extract standardized location records from JSONL file"""
@@ -40,11 +63,11 @@ def extract_location_data(input_file, output_file=None):
         if output_file is None:
             output_file = str(input_path.with_suffix('.location.jsonl'))
             
-        # Try standard extraction once
+        # Try standard extraction first
         print("Attempting standard extraction...")
         success = False
         try:
-            # Try NMEA extraction
+            # Try NMEA extraction with binary mode
             success, records = extract_nmea_location_data(input_file)
             if not success:
                 # Try RINEX extraction
@@ -151,75 +174,55 @@ def is_valid_location(record):
 def extract_nmea_location_data(input_file):
     """Extract location data from NMEA JSONL file"""
     try:
-        location_records = []
-        
-        with open(input_file, 'r') as f:
-            for line in f:
+        records = []
+        # Try reading as binary first
+        try:
+            with open(input_file, 'rb') as f:
+                content = f.read()
+                # Try different encodings
+                for encoding in ['utf-8', 'latin1', 'ascii']:
+                    try:
+                        text = content.decode(encoding)
+                        break
+                    except UnicodeDecodeError:
+                        continue
+                else:
+                    # If no encoding works, try reading line by line
+                    text = ''
+                    for line in content.split(b'\n'):
+                        try:
+                            text += line.decode('utf-8', errors='ignore') + '\n'
+                        except:
+                            continue
+        except Exception as e:
+            print(f"Error reading NMEA file: {e}")
+            return False, []
+
+        # Process the text content
+        for line in text.splitlines():
+            try:
+                if not line.strip():
+                    continue
+                    
+                # Try parsing as JSON first
                 try:
-                    data = json.loads(line)
-                    record = None
-                    
-                    # Process GGA messages (primary source of 3D location)
-                    if data.get('sentence_type') == 'GGA':
-                        try:
-                            lat = data.get('lat', '')
-                            lat_dir = data.get('lat_dir', '')
-                            lon = data.get('lon', '')
-                            lon_dir = data.get('lon_dir', '')
-                            
-                            if lat and lon:
-                                # Convert coordinates
-                                latitude, longitude = convert_nmea_coordinates(lat, lat_dir, lon, lon_dir)
-                                
-                                if latitude is not None and longitude is not None:
-                                    record = {
-                                        'timestamp_ms': data.get('timestamp_ms'),
-                                        'latitude': latitude,
-                                        'longitude': longitude,
-                                        'altitude': float(data.get('altitude', 0)),
-                                        'num_satellites': int(data.get('num_sats', 0)),
-                                        'hdop': float(data.get('horizontal_dil', 0)),
-                                        'quality': int(data.get('gps_qual', 0))
-                                    }
-                        except (ValueError, TypeError):
-                            continue
-                            
-                    # Process RMC messages (adds speed and course)
-                    elif data.get('sentence_type') == 'RMC':
-                        try:
-                            lat = data.get('lat', '')
-                            lat_dir = data.get('lat_dir', '')
-                            lon = data.get('lon', '')
-                            lon_dir = data.get('lon_dir', '')
-                            
-                            if lat and lon:
-                                # Convert coordinates
-                                latitude, longitude = convert_nmea_coordinates(lat, lat_dir, lon, lon_dir)
-                                
-                                if latitude is not None and longitude is not None:
-                                    record = {
-                                        'timestamp_ms': data.get('timestamp_ms'),
-                                        'latitude': latitude,
-                                        'longitude': longitude,
-                                        'speed': float(data.get('spd_over_grnd', 0)),
-                                        'course': float(data.get('true_course', 0))
-                                    }
-                        except (ValueError, TypeError):
-                            continue
-                    
-                    if record:
-                        location_records.append(record)
-                        
-                except json.JSONDecodeError:
-                    continue
-                except Exception as e:
-                    print(f"Error processing line: {e}")
-                    continue
-                    
-        return len(location_records) > 0, location_records
-        
+                    record = json.loads(line)
+                except:
+                    # If not JSON, try parsing as NMEA
+                    if line.startswith('$'):
+                        record = parse_nmea_sentence(line)
+                    else:
+                        continue
+                
+                if record and validate_location_record(record):
+                    records.append(record)
+            except Exception as e:
+                print(f"Error processing line: {str(e)}")
+                continue
+                
+        return bool(records), records
     except Exception as e:
-        print(f"Error extracting NMEA location data: {str(e)}")
+        print(f"Error extracting NMEA data: {str(e)}")
         return False, []
 
 def extract_rinex_location_data(input_file):
@@ -293,100 +296,182 @@ def convert_nmea_coordinates(lat, lat_dir, lon, lon_dir):
     except (ValueError, TypeError, IndexError):
         return None, None
 
-def extract_with_llm(input_file, output_file):
-    """Extract location data using LLM when standard parsing fails"""
-    print("Starting LLM-based location extraction...")
-    
+def parse_nmea_sentence(sentence):
+    """Parse raw NMEA sentence into a record"""
     try:
-        # Read sample data for analysis
-        with open(input_file, 'r') as f:
-            sample_data = []
-            for i, line in enumerate(f):
-                if i < 5:  # Read first 5 lines as sample
-                    sample_data.append(line.strip())
-                else:
-                    break
-                    
-        # Request location extraction from LLM
-        messages = [
-            {"role": "system", "content": """You are an expert GNSS data extraction AI agent specializing in Python scripting. Your task is to generate robust Python code that processes GNSS data and extracts standardized location records. The generated Python code must:
-1. Be syntactically correct and compatible with Python 3.11.
-2. Return only the Python script enclosed in a code block (```python ... ```) with no additional comments, explanations, or text.
-3. Include error handling that captures any execution errors in a variable named 'execution_errors' and feeds them back to the LLM agent for refinement.
-4. Extract at least the following fields: timestamp_ms, latitude, longitude, altitude (if available), and num_satellites (if available).
-5. Read from the input file path and write to the output file path provided in the code.
-6. DO NOT include example usage or test data in the generated code.
-Return only the Python code following these guidelines."""},
-            {"role": "user", "content": f"""Here's a sample of the data from {input_file}:
-
-{chr(10).join(sample_data)}
-
-Generate Python code to extract location data from this file and save it to {output_file}.
-The code should use these exact file paths:
-INPUT_FILE = "{input_file}"
-OUTPUT_FILE = "{output_file}"
-"""}
-        ]
+        if not sentence.startswith('$'):
+            return None
+            
+        parts = sentence.strip().split(',')
+        if len(parts) < 2:
+            return None
+            
+        msg_type = parts[0][1:]  # Remove $
+        record = {'sentence_type': msg_type}
         
+        # GGA message (Global Positioning System Fix Data)
+        if msg_type in ['GPGGA', 'GNGGA']:
+            if len(parts) >= 15:
+                try:
+                    record.update({
+                        'timestamp_ms': int(float(parts[1]) * 1000) if parts[1] else None,
+                        'latitude': float(parts[2][:2]) + float(parts[2][2:]) / 60 if parts[2] else None,
+                        'lat_dir': parts[3],
+                        'longitude': float(parts[4][:3]) + float(parts[4][3:]) / 60 if parts[4] else None,
+                        'lon_dir': parts[5],
+                        'quality': int(parts[6]) if parts[6] else None,
+                        'num_satellites': int(parts[7]) if parts[7] else None,
+                        'hdop': float(parts[8]) if parts[8] else None,
+                        'altitude': float(parts[9]) if parts[9] else None,
+                        'altitude_units': parts[10]
+                    })
+                except (ValueError, IndexError):
+                    return None
+                    
+        # RMC message (Recommended Minimum Navigation Information)
+        elif msg_type in ['GPRMC', 'GNRMC']:
+            if len(parts) >= 12:
+                try:
+                    record.update({
+                        'timestamp_ms': int(float(parts[1]) * 1000) if parts[1] else None,
+                        'status': parts[2],
+                        'latitude': float(parts[3][:2]) + float(parts[3][2:]) / 60 if parts[3] else None,
+                        'lat_dir': parts[4],
+                        'longitude': float(parts[5][:3]) + float(parts[5][3:]) / 60 if parts[5] else None,
+                        'lon_dir': parts[6],
+                        'speed': float(parts[7]) * 0.514444 if parts[7] else None,  # Convert knots to m/s
+                        'course': float(parts[8]) if parts[8] else None
+                    })
+                except (ValueError, IndexError):
+                    return None
+                    
+        # GSA message (GNSS DOP and Active Satellites)
+        elif msg_type in ['GPGSA', 'GNGSA']:
+            if len(parts) >= 18:
+                try:
+                    record.update({
+                        'mode': parts[1],
+                        'fix_type': int(parts[2]) if parts[2] else None,
+                        'pdop': float(parts[15]) if parts[15] else None,
+                        'hdop': float(parts[16]) if parts[16] else None,
+                        'vdop': float(parts[17]) if parts[17] else None
+                    })
+                except (ValueError, IndexError):
+                    return None
+                    
+        return record
+    except Exception:
+        return None
+
+def extract_with_llm(input_file, output_file):
+    """Use LLM to extract location data from file"""
+    try:
+        print("Starting LLM-based extraction...")
+        
+        # Read sample data for analysis
+        print("Reading sample data...")
+        sample_lines = []
+        unique_message_types = set()
+        
+        try:
+            with open(input_file, 'rb') as f:
+                content = f.read()
+                # Try different encodings
+                for encoding in ['utf-8', 'latin1', 'ascii']:
+                    try:
+                        text = content.decode(encoding)
+                        break
+                    except UnicodeDecodeError:
+                        continue
+                else:
+                    text = content.decode('utf-8', errors='ignore')
+                
+                # Get first 15 lines minimum
+                lines = text.splitlines()[:15]
+                sample_lines.extend(lines)
+                
+                # Look for more unique message types up to 25 lines total
+                if len(lines) > 15:
+                    for line in lines[15:]:
+                        if len(sample_lines) >= 25:
+                            break
+                        try:
+                            if line.startswith('$'):
+                                msg_type = line.split(',')[0][1:]
+                                if msg_type not in unique_message_types:
+                                    unique_message_types.add(msg_type)
+                                    sample_lines.append(line)
+                            else:
+                                record = json.loads(line)
+                                msg_type = record.get('sentence_type')
+                                if msg_type not in unique_message_types:
+                                    unique_message_types.add(msg_type)
+                                    sample_lines.append(line)
+                        except:
+                            continue
+                            
+        except Exception as e:
+            print(f"Error reading sample data: {e}")
+            return None
+            
+        print(f"Collected {len(sample_lines)} sample lines")
+        sample_data = '\n'.join(sample_lines)
+        
+        # Request format analysis from LLM with reduced token limit
+        system_message = """You are a GNSS data processing expert. Analyze the sample data and generate Python code to extract location records.
+Focus on extracting: timestamp_ms, latitude, longitude, altitude, speed, course, and quality indicators (hdop, pdop, num_satellites).
+The code should handle both JSON and raw NMEA formats. Return only the Python code block with no additional text."""
+
         max_attempts = 10
         for attempt in range(max_attempts):
             try:
+                print(f"\nProcessing attempt {attempt + 1} of {max_attempts}")
+                print("Generating processing code...")
+                
                 response = client.chat.completions.create(
-                    model=os.getenv('AZURE_OPENAI_ENGINE'),
-                    messages=messages,
+                    model=os.getenv('AZURE_OPENAI_MODEL'),
+                    messages=[
+                        {"role": "system", "content": system_message},
+                        {"role": "user", "content": f"Sample data:\n{sample_data}\n\nGenerate Python code to process this data format."}
+                    ],
                     temperature=0.7,
-                    max_tokens=10000
+                    max_tokens=10000,  # Updated from 2000
+                    n=1
                 )
                 
-                # Extract and execute the generated code
-                generated_code = response.choices[0].message.content
-                
-                # Extract code from within code block markers if present
-                if "```python" in generated_code and "```" in generated_code:
-                    # Extract code between ```python and ``` markers
-                    code_start = generated_code.find("```python") + len("```python")
-                    code_end = generated_code.find("```", code_start)
-                    if code_end != -1:
-                        generated_code = generated_code[code_start:code_end].strip()
-                
-                print("\nGenerated code:")
-                print(f"```python\n{generated_code}\n```")
-                
-                print("\nExecuting generated code...")
-                
-                # Create a local namespace for execution
-                local_namespace = {}
-                exec(generated_code, globals(), local_namespace)
-                
-                # Check if location_records were created
-                if 'location_records' not in local_namespace:
-                    print("No location_records variable was created")
-                    print(f"\nProcessing attempt {attempt + 1} of {max_attempts}")
-                    print("Generating processing code...")
+                if not response.choices:
                     continue
                     
-                # Validate the records
-                records = local_namespace['location_records']
-                if validate_location_records(records):
-                    print("Records validated successfully, saving to file...")
-                    with open(output_file, 'w') as f:
-                        for record in records:
-                            f.write(json.dumps(record) + '\n')
-                    print(f"Successfully processed {len(records)} records")
-                    return output_file
+                generated_code = response.choices[0].message.content
+                print("\nGenerated code:")
+                print("```python")
+                print(generated_code)
+                print("```")
+                
+                # Extract code block if present
+                if '```python' in generated_code:
+                    code_to_exec = generated_code.split('```python')[1].split('```')[0]
                 else:
-                    print("Generated records failed validation")
-                    print(f"\nProcessing attempt {attempt + 1} of {max_attempts}")
-                    print("Generating processing code...")
-                    
+                    code_to_exec = generated_code
+
+                print("\nExecuting generated code...")
+
+                # Execute only the code block content
+                local_vars = {'INPUT_FILE': input_file, 'OUTPUT_FILE': output_file}
+                exec(code_to_exec, globals(), local_vars)
+                
+                # Verify the results
+                if os.path.exists(output_file):
+                    with open(output_file, 'r') as f:
+                        records = [json.loads(line) for line in f]
+                    if validate_location_records(records):
+                        print("LLM extraction successful")
+                        return output_file
+                        
             except Exception as e:
                 print(f"Attempt {attempt + 1} failed: {str(e)}")
-                if attempt < max_attempts - 1:
-                    print(f"\nProcessing attempt {attempt + 2} of {max_attempts}")
-                    print("Generating processing code...")
-                continue
                 
-        print(f"Failed to generate valid output after {max_attempts} attempts")
+        print("Failed to generate valid output after 10 attempts")
         return None
         
     except Exception as e:
@@ -394,36 +479,294 @@ OUTPUT_FILE = "{output_file}"
         return None
 
 def validate_location_record(record):
-    """Validate if a location record has the required fields"""
-    if not isinstance(record, dict):
-        return False
+    """Validate a single location record"""
+    try:
+        # Basic validation
+        if not isinstance(record, dict):
+            return False
+            
+        # Must have timestamp
+        if 'timestamp_ms' not in record:
+            return False
+            
+        # Check for positioning data
+        has_position = False
         
-    # Check for required fields based on format type
-    if 'satellite_system' in record:
-        # RINEX format
-        required_fields = ['timestamp_ms', 'satellite_system', 'satellite_number']
-        optional_fields = ['pseudorange', 'carrier_phase', 'doppler', 'signal_strength',
-                         'computed_latitude', 'computed_longitude', 'computed_altitude']
-    else:
-        # NMEA format
-        required_fields = ['timestamp_ms']
-        optional_fields = ['latitude', 'longitude', 'altitude', 'num_satellites',
-                         'hdop', 'quality', 'speed', 'course']
-    
-    # Check required fields
+        # Direct position
+        if all(field in record for field in ['latitude', 'longitude']):
+            try:
+                lat = float(record['latitude'])
+                lon = float(record['longitude'])
+                if -90 <= lat <= 90 and -180 <= lon <= 180:
+                    has_position = True
+                    
+                # Validate altitude if present
+                if 'altitude' in record and record['altitude'] is not None:
+                    alt = float(record['altitude'])
+                    if not (-1000 <= alt <= 9000):  # Reasonable altitude range in meters
+                        return False
+            except (ValueError, TypeError):
+                return False
+                
+        # GNSS raw measurements
+        if all(field in record for field in ['pseudorange', 'carrier_phase']):
+            try:
+                float(record['pseudorange'])
+                float(record['carrier_phase'])
+                has_position = True
+            except (ValueError, TypeError):
+                pass
+                
+        if not has_position:
+            return False
+            
+        # Validate quality indicators if present
+        if 'hdop' in record and record['hdop'] is not None:
+            try:
+                hdop = float(record['hdop'])
+                if not (0 <= hdop <= 50):  # Reasonable HDOP range
+                    return False
+            except (ValueError, TypeError):
+                return False
+                
+        if 'pdop' in record and record['pdop'] is not None:
+            try:
+                pdop = float(record['pdop'])
+                if not (0 <= pdop <= 50):  # Reasonable PDOP range
+                    return False
+            except (ValueError, TypeError):
+                return False
+                
+        if 'num_satellites' in record and record['num_satellites'] is not None:
+            try:
+                num_sats = int(record['num_satellites'])
+                if not (0 <= num_sats <= 50):  # Reasonable number of satellites
+                    return False
+            except (ValueError, TypeError):
+                return False
+                
+        # Validate motion data if present
+        if 'speed' in record and record['speed'] is not None:
+            try:
+                speed = float(record['speed'])
+                if not (0 <= speed <= 278):  # Max speed ~1000 km/h in m/s
+                    return False
+            except (ValueError, TypeError):
+                return False
+                
+        if 'course' in record and record['course'] is not None:
+            try:
+                course = float(record['course'])
+                if not (0 <= course <= 360):  # Course in degrees
+                    return False
+            except (ValueError, TypeError):
+                return False
+                
+        return True
+        
+    except Exception:
+        return False
+
+def _validate_coordinates(latitude, longitude, altitude=None):
+    """Validate coordinate ranges"""
+    try:
+        lat = float(latitude)
+        lon = float(longitude)
+        
+        # Check latitude range (-90 to 90)
+        if lat < -90 or lat > 90:
+            return False
+            
+        # Check longitude range (-180 to 180)
+        if lon < -180 or lon > 180:
+            return False
+            
+        # Check altitude if provided (reasonable range check)
+        if altitude is not None:
+            alt = float(altitude)
+            # Most GNSS applications work between -1000m (Dead Sea) and 9000m (Mount Everest)
+            if alt < -1000 or alt > 9000:
+                return False
+                
+        return True
+    except (ValueError, TypeError):
+        return False
+
+def _validate_speed(speed):
+    """Validate speed value (in m/s)"""
+    try:
+        spd = float(speed)
+        # Maximum reasonable speed for most applications (about 1000 km/h)
+        return 0 <= spd <= 278
+    except (ValueError, TypeError):
+        return False
+
+def _validate_course(course):
+    """Validate course/bearing value (in degrees)"""
+    try:
+        crs = float(course)
+        return 0 <= crs <= 360
+    except (ValueError, TypeError):
+        return False
+
+def _validate_accuracy(accuracy):
+    """Validate accuracy value (in meters)"""
+    try:
+        acc = float(accuracy)
+        # Maximum reasonable accuracy value (1km)
+        return 0 <= acc <= 1000
+    except (ValueError, TypeError):
+        return False
+
+def _validate_pdop(pdop):
+    """Validate PDOP (Position Dilution of Precision) value"""
+    try:
+        pd = float(pdop)
+        # PDOP values: <2 excellent, 2-5 good, 5-10 moderate, >10 poor
+        return 0 < pd <= 50
+    except (ValueError, TypeError):
+        return False
+
+def _validate_android_record(record):
+    """Validate Android-specific location record"""
+    required_fields = ['latitude', 'longitude', 'provider']
     if not all(field in record for field in required_fields):
         return False
         
-    # Check that at least some optional fields are present
-    if not any(field in record for field in optional_fields):
-        return False
-        
-    # Validate timestamp
     try:
-        timestamp = int(record['timestamp_ms'])
-        if timestamp <= 0:
+        # Validate coordinates
+        if not _validate_coordinates(record['latitude'], record['longitude'],
+                                   record.get('altitude')):
             return False
+            
+        # Validate optional fields
+        if 'accuracy' in record and not _validate_accuracy(record['accuracy']):
+            return False
+        if 'speed' in record and not _validate_speed(record['speed']):
+            return False
+        if 'bearing' in record and not _validate_course(record['bearing']):
+            return False
+            
+        return True
     except (ValueError, TypeError):
         return False
-    
-    return True 
+
+def _validate_huawei_record(record):
+    """Validate Huawei-specific location record"""
+    required_fields = ['latitude', 'longitude', 'accuracy']
+    if not all(field in record for field in required_fields):
+        return False
+        
+    try:
+        # Validate coordinates
+        if not _validate_coordinates(record['latitude'], record['longitude'],
+                                   record.get('altitude')):
+            return False
+            
+        # Validate accuracy
+        if not _validate_accuracy(record['accuracy']):
+            return False
+            
+        # Validate optional fields
+        if 'speed' in record and not _validate_speed(record['speed']):
+            return False
+            
+        return True
+    except (ValueError, TypeError):
+        return False
+
+def _validate_ublox_record(record):
+    """Validate u-blox-specific location record"""
+    required_fields = ['latitude', 'longitude', 'fix_type']
+    if not all(field in record for field in required_fields):
+        return False
+        
+    try:
+        # Validate coordinates
+        if not _validate_coordinates(record['latitude'], record['longitude'],
+                                   record.get('altitude')):
+            return False
+            
+        # Validate fix type (0=no fix, 1=dead reckoning, 2=2D, 3=3D, 4=GNSS+dead reckoning, 5=time only)
+        fix_type = int(record['fix_type'])
+        if not 0 <= fix_type <= 5:
+            return False
+            
+        # Validate optional fields
+        if 'num_sv' in record:
+            num_sv = int(record['num_sv'])
+            if not 0 <= num_sv <= 50:  # Maximum reasonable number of satellites
+                return False
+                
+        if 'pdop' in record and not _validate_pdop(record['pdop']):
+            return False
+            
+        return True
+    except (ValueError, TypeError):
+        return False
+
+def _validate_ios_record(record):
+    """Validate iOS-specific location record"""
+    required_fields = ['latitude', 'longitude', 'altitude']
+    if not all(field in record for field in required_fields):
+        return False
+        
+    try:
+        # Validate coordinates
+        if not _validate_coordinates(record['latitude'], record['longitude'],
+                                   record['altitude']):
+            return False
+            
+        # Validate optional fields
+        if 'course' in record and not _validate_course(record['course']):
+            return False
+        if 'speed' in record and not _validate_speed(record['speed']):
+            return False
+        if 'h_accuracy' in record and not _validate_accuracy(record['h_accuracy']):
+            return False
+        if 'v_accuracy' in record and not _validate_accuracy(record['v_accuracy']):
+            return False
+            
+        return True
+    except (ValueError, TypeError):
+        return False
+
+def _validate_rinex_record(record):
+    """Validate RINEX-specific location record"""
+    required_fields = ['satellite_system', 'satellite_number']
+    if not all(field in record for field in required_fields):
+        return False
+        
+    try:
+        if 'pseudorange' in record:
+            float(record['pseudorange'])
+        if 'carrier_phase' in record:
+            float(record['carrier_phase'])
+        if 'doppler' in record:
+            float(record['doppler'])
+        if 'signal_strength' in record:
+            float(record['signal_strength'])
+        return True
+    except (ValueError, TypeError):
+        return False
+
+def _validate_nmea_record(record):
+    """Validate NMEA-specific location record"""
+    required_fields = ['latitude', 'longitude']
+    if not all(field in record for field in required_fields):
+        return False
+        
+    try:
+        float(record['latitude'])
+        float(record['longitude'])
+        if 'altitude' in record:
+            float(record['altitude'])
+        if 'num_satellites' in record:
+            int(record['num_satellites'])
+        if 'hdop' in record:
+            float(record['hdop'])
+        if 'quality' in record:
+            int(record['quality'])
+        return True
+    except (ValueError, TypeError):
+        return False 

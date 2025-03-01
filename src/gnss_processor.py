@@ -17,11 +17,11 @@ load_dotenv()
 
 class GNSSProcessor:
     def __init__(self):
-        self.system_prompt = """You are an expert GNSS data processing AI agent specializing in Python scripting. Your task is to generate a robust Python script that processes the provided GNSS data sample and extracts standardized location records. The generated Python code must:
+        self.system_prompt = """You are an expert GNSS data processing AI agent specializing in Python scripting. Your task is to generate a robust Python script that processes GNSS data to extract standardized location records. The generated Python code must:
 1. Be syntactically correct and compatible with Python 3.11.
-2. Return only the Python script enclosed in a code block (```python ... ```); include no additional comments, explanations, or text outside of the code block.
-3. Include error handling that captures any execution errors and assigns them to a variable named 'execution_errors'. All execution errors must then be fed back to the LLM agent for refinement.
-4. Extract at least the following fields: timestamp_ms, latitude, longitude, altitude (if available), and num_satellites (if available).
+2. Return only the Python script enclosed in a code block using ```python and ```; do not include any additional explanations, comments, or system messages outside the code block.
+3. Do not include any sample data in the code; instead, specify that the input data will be provided as a file input and the output should be written to a specified file.
+4. Include error handling that captures execution errors and assigns them to a variable named 'execution_errors'.
 Return only the Python code following these guidelines."""
         self.output_callback = print  # Default to print function
 
@@ -216,7 +216,7 @@ Return only the Python code following these guidelines."""
                     client = AzureOpenAI(
                         api_key=os.getenv('AZURE_OPENAI_API_KEY'),
                         api_version=os.getenv('AZURE_OPENAI_API_VERSION'),
-                        base_url=os.getenv('AZURE_OPENAI_ENDPOINT')
+                        base_url=f"{os.getenv('AZURE_OPENAI_ENDPOINT')}/deployments/{os.getenv('AZURE_OPENAI_ENGINE')}"
                     )
                     
                     response = client.chat.completions.create(
@@ -228,15 +228,14 @@ Return only the Python code following these guidelines."""
                     
                     ai_response = response.choices[0].message.content
                     
-                    # Extract code from response
-                    code_match = re.search(r'```python\n(.*?)\n```', ai_response, re.DOTALL)
-                    if not code_match:
-                        self.log("No code block found in response, requesting clarification...")
+                    # Extract python code block(s) from the LLM response
+                    code_blocks = re.findall(r'```python\s*(.*?)\s*```', ai_response, re.DOTALL)
+                    if not code_blocks:
+                        self.log("No Python code block found in response, requesting clarification...")
                         messages.append({"role": "assistant", "content": ai_response})
                         messages.append({"role": "user", "content": "Please provide the code within a Python code block using ```python and ``` markers."})
                         continue
-
-                    processing_code = code_match.group(1)
+                    processing_code = code_blocks[0]
                     self.log("\nGenerated code:")
                     self.log("```python")
                     self.log(processing_code)

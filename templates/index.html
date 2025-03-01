@@ -301,19 +301,21 @@
                 if (data.state === 'SUCCESS') {
                     if (data.result.status === 'success') {
                         updateFileStatus(fileItem, 'completed', 'Processing complete');
-                        // Add download button
-                        const downloadBtn = document.createElement('button');
-                        downloadBtn.className = 'bg-green-500 hover:bg-green-600 text-white font-semibold py-2 px-4 rounded ml-4';
-                        downloadBtn.textContent = 'Download Results';
-                        downloadBtn.onclick = () => {
-                            const link = document.createElement('a');
-                            link.href = `/download/${data.result.result_file}`;
-                            link.download = data.result.result_file;
-                            document.body.appendChild(link);
-                            link.click();
-                            document.body.removeChild(link);
-                        };
-                        fileItem.querySelector('.flex.items-center.justify-between').appendChild(downloadBtn);
+                        // Add download button if not already added
+                        if (!fileItem.querySelector('button')) {
+                            const downloadBtn = document.createElement('button');
+                            downloadBtn.className = 'bg-green-500 hover:bg-green-600 text-white font-semibold py-2 px-4 rounded ml-4';
+                            downloadBtn.textContent = 'Download Results';
+                            downloadBtn.onclick = () => {
+                                const link = document.createElement('a');
+                                link.href = `/download/${data.result.result_file}`;
+                                link.download = data.result.result_file;
+                                document.body.appendChild(link);
+                                link.click();
+                                document.body.removeChild(link);
+                            };
+                            fileItem.querySelector('.flex.items-center.justify-between').appendChild(downloadBtn);
+                        }
                     } else {
                         updateFileStatus(fileItem, 'error', data.result.message || 'Processing failed');
                     }
@@ -323,9 +325,14 @@
                 } else if (data.state === 'PROGRESS') {
                     updateFileStatus(fileItem, 'processing', 'Processing in progress...');
                     if (data.result.output) {
-                        data.result.output.forEach((msg, idx) => {
+                        // Get the current attempts list
+                        const attemptsList = fileItem.querySelector('.attempts-list');
+                        const currentAttempts = attemptsList.children.length;
+                        
+                        // Only add new messages that we haven't seen before
+                        data.result.output.slice(currentAttempts).forEach((msg, idx) => {
                             if (msg.includes('Standard') || msg.includes('LLM')) {
-                                addProcessingAttempt(fileItem, idx + 1, msg);
+                                addProcessingAttempt(fileItem, currentAttempts + idx + 1, msg);
                             }
                         });
                     }
